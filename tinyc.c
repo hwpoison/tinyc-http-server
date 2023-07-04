@@ -1,13 +1,14 @@
 // Writted by hwpoison
 #include <stdio.h>
 #include <stdlib.h>
-#include <winsock2.h>
 #include <stdint.h>
-#include <unistd.h>
 #include <string.h>
+#include <stdarg.h>
 #include <time.h>
 
-#define BUFFER_SIZE 4048
+#include <winsock2.h>
+
+#define BUFFER_SIZE 1024
 #define MAX_PATH_LENGTH 400
 #define MAX_MIME_TYPES 30
 
@@ -16,18 +17,22 @@ typedef struct {
     const char *mime_type;
 } MimeType;
 
-const char *get_filename_extension(const char*file_path);
+// utils functions
+char* get_current_datetime();
+const char *get_filename_extension(const char* file_path);
 const char *get_filename_mimetype(const char *path);
 void remove_slash_from_start(char* str);
-void send_404_response(SOCKET socket);
-char* get_current_datetime();
-void send_http_response(
-  SOCKET socket, 
-  int status, 
-  const char *content_type, 
-  const char *content, 
-  size_t content_length ); 
+size_t get_file_length(FILE *file);
 
+void print(const char* msg, ...);
+
+
+// response functions
+void send_404_response(SOCKET socket);
+void send_500_response(SOCKET socket);
+void send_200_http_response(FILE *file, SOCKET socket, const char *content_type, size_t content_length);
+void send_206_http_response(FILE *file, SOCKET socket, const char *content_type, size_t file_size, size_t start, size_t end);
+void stream_file_content(FILE *file, SOCKET socket);
 
 int main(int argc, char *argv[]) {
     WSADATA wsaData;
@@ -39,24 +44,28 @@ int main(int argc, char *argv[]) {
 
     char buffer[BUFFER_SIZE] = {0};
     char *input_filename, *file_to_serve_path;
-    uint8_t *response_body = NULL;
-    FILE *file;
+    size_t start_offset, end_offset;
+    size_t file_size;
+    char tmpbuff[BUFFER_SIZE] = {0};
+    
 
     if (argc < 2 || argc == 1) {
         printf("Usage: %s <port> <file_name.html>\n\
         If file name is not specified, all content of the current dir will be served.\n", argv[0]);
         return 1;
     }
+    printf("-> Welcome to tinyC!\n");
 
     // extract args
     input_filename = argv[2];
     port = atoi(argv[1]);
 
     if(input_filename!=NULL){
-      printf("[+] Serving only %s file.\n", input_filename);
+      print("[+] Serving only %s file.", input_filename);
     }
 
     // winsock init
+    print("Initializing server socket.");
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         perror("Error with winsock");
         exit(EXIT_FAILURE);
@@ -84,75 +93,74 @@ int main(int argc, char *argv[]) {
         perror("Error to listen.");
         exit(EXIT_FAILURE);
     }
-    printf("[!] Listening by :%d port...\n", port);
+    print("Listening on :%d port...", port);
 
-    // accept the connection and handle it
+    // accept incoming connections and handle it (1 per time)
     while (1) {
-        // the client make a request to serve and a socket is opened and ready for information exchange
+        // the client make a request to the server and a socket connection is created and stablished
         if ((new_client_socket = accept(server_socket, (struct sockaddr *)&address, &addrlen)) == INVALID_SOCKET) {
             perror("[x] Error accepting the connection");
             exit(EXIT_FAILURE);
         }
-        // Obtain the client IP address
+
+        // get client ip address
         char *ip = inet_ntoa(address.sin_addr);
-        printf("[>] %s from %s\n", get_current_datetime(), ip);
+        print("Petition incoming  from %s", ip);
+
         // Read the HTTP request content
         recv(new_client_socket, buffer, BUFFER_SIZE, 0);
+        print("Client Request:\n %s\n== End of Client request ==", buffer);
+
 
         // If file to serve was not specified, serve all dir content
+        strcpy(tmpbuff, buffer);
         if(input_filename == NULL){
           // Extract the uri content (ex: /image.jpg)
-          char *path_start = strchr(buffer, ' ') + 1; 
+          char *path_start = strchr(tmpbuff, ' ') + 1; 
           char *path_end = strchr(path_start, ' ');  
           
           if (path_start != NULL && path_end != NULL) {
               *path_end = '\0';
               file_to_serve_path = path_start;
-              printf("[!] URL path: %s\n", file_to_serve_path);
+              print("URL path: %s", file_to_serve_path);
           }
-          remove_slash_from_start(file_to_serve_path);
+          // for get file relative path ( '/index.html' > 'index.html')
+          remove_slash_from_start(file_to_serve_path); 
         }else{
+          // serve only specified file.
           file_to_serve_path = input_filename;
         }
 
         // Open the file in the same executable path
-        printf("[*] Finding for %s file..\n", file_to_serve_path);
-        file = fopen(file_to_serve_path, "rb");
-        
+        print("Finding for %s file..", file_to_serve_path);
+        FILE *file = fopen(file_to_serve_path, "rb");
+
         if (file == NULL) {
             send_404_response(new_client_socket);
         } else {
-            // get file size
-            fseek(file, 0, SEEK_END);
-            long file_size = ftell(file);
-            fseek(file, 0, SEEK_SET);
-            printf("[!] File lenght:%ld\n", file_size);
+            file_size = get_file_length(file);
+            start_offset = 0;
+            end_offset = file_size - 1;
 
-            // allocate memory for the body response
-            response_body = malloc(file_size + 1);
-            if (response_body == NULL) {
-                perror("[x] Error allocating memory");
-                exit(EXIT_FAILURE);
+            // Check if the request is has a "Range" header and extract range to stream
+            char* range_header = strstr(buffer, "Range: ");
+            if (range_header != NULL) {
+                sscanf(range_header, "Range: bytes=%I64d-%I64d", &start_offset, &end_offset);
+                print("Range detected: from %I64d to %I64d", start_offset, end_offset);
+                send_206_http_response(
+                    file, 
+                    new_client_socket, 
+                    get_filename_mimetype(file_to_serve_path), 
+                    file_size,
+                    start_offset, 
+                    end_offset);
+            }else{
+                send_200_http_response(
+                    file,
+                    new_client_socket,
+                    get_filename_mimetype(file_to_serve_path),
+                    file_size);
             }
-
-            // read and close the file
-            size_t bytes_read = fread(response_body, 1, file_size, file);
-            if(bytes_read!=file_size){
-              perror("[x] Failed reading the file!");
-            }
-
-            fclose(file);
-
-            // add the EOF to the body content
-            response_body[file_size] = '\0';
-
-            send_http_response(
-              new_client_socket, 
-              200, 
-              get_filename_mimetype(file_to_serve_path), 
-              (const char *)response_body, 
-              file_size);
-            free(response_body);
           }
         // close client socket connection 
         closesocket(new_client_socket);
@@ -174,9 +182,13 @@ MimeType mime_types[MAX_MIME_TYPES] = {
     { ".xml", "application/xml" },
     { ".gif", "image/gif" },
     { ".jpeg", "image/jpeg" },
+    { ".mkv",  "video/mp4"},
+    { ".flac",  "audio/flac"},
+    { ".mp3",  "audio/mp3"},
     { ".jpg", "image/jpeg" },
     { ".png", "image/png" },
     { ".svg", "image/svg+xml" },
+    { ".mp4", "video/mp4" },
     { ".ico", "image/x-icon" },
     { ".pdf", "application/pdf" },
     { ".doc", "application/msword" },
@@ -190,15 +202,48 @@ MimeType mime_types[MAX_MIME_TYPES] = {
 const char *not_found_response =
     "HTTP/1.1 404 Not Found\r\n"
     "Content-Type: text/html\r\n"
-    "Content-Length: %d\r\n"
-    "\r\n"
-    "<html>"
-    "<head><title>Oops! 404 Not Found</title></head>"
-    "<body>"
-    "<h1>404 Not Found :(</h1>"
+    "Content-Length: %d\r\n\r\n<html>"
+    "<head><title> Oops! 404 Not Found</title></head>"
+    "<body><h1>404 Not Found! :(</h1>"
     "<p>The requested resource was not found on this server.</p>"
-    "</body>"
-    "</html>";
+    "</body></html>";
+
+const char *server_side_error =
+    "HTTP/1.1 500 Internal Server Error\r\n"
+    "Content-Type: text/html\r\n"
+    "Content-Length: %d\r\n\r\n<html>"
+    "<head><title>500 Internal Error</title></head>"
+    "<body><h1>500</h1><p>Internal server error.</p>"
+    "</body></html>";
+
+void print(const char* msg, ...) {
+    va_list args;
+    va_start(args, msg);
+
+    printf("[%s] ", get_current_datetime());
+    vprintf(msg, args);
+    printf("\n");
+
+    va_end(args);
+}
+
+size_t get_file_length(FILE *file){
+    fseek(file, 0, SEEK_END);
+    size_t fileLength = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    return fileLength;
+}
+
+void stream_file_content(FILE *file, SOCKET socket){
+    char buffer[BUFFER_SIZE];
+    size_t bytesRead;
+    // stream file content
+    while ((bytesRead = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
+        if (send(socket, buffer, bytesRead, 0) == -1) {
+            break; 
+        }   
+    }
+}
 
 void remove_slash_from_start(char* str) {
     size_t length = strlen(str);
@@ -210,16 +255,13 @@ void remove_slash_from_start(char* str) {
 
 const char *get_filename_extension(const char *path) {
     const char *extension = strrchr(path, '.');
-    if (extension != NULL && extension != path) {
-        return extension;
-    }
-    return "";
+    return extension!=NULL && extension!=path?extension:"";
 }
 
 const char *get_filename_mimetype(const char *path) {
     const char *extension = get_filename_extension(path);
-    for (int i = 0; i < MAX_MIME_TYPES; i++) {
-        if (strcmp(mime_types[i].extension, extension) == 0) {
+    for (int i = 0; mime_types[i].extension != NULL; i++) {
+        if (strcmp(mime_types[i].extension, extension) == 0) { // improve this shit!
             return mime_types[i].mime_type;
         }
     }
@@ -230,22 +272,14 @@ void send_404_response(SOCKET socket) {
     char response[1024];
     sprintf(response, not_found_response, strlen(not_found_response));
     send(socket, response, strlen(response), 0);
-    printf("[?] 404 not found.");
+    print("404 not found.");
 }
 
-void send_http_response(
-  SOCKET socket, 
-  int status, 
-  const char *content_type, 
-  const char *content, 
-  size_t content_length ) 
-{
-    printf("[*] Sending response.\n");
-    char header[1024];
-    sprintf(header, "HTTP/1.1 %d OK\r\nContent-Type: %s\r\nContent-Length: %I64d\r\n\r\n", status, content_type, content_length);
-    send(socket, header, strlen(header), 0);
-    send(socket, content, content_length, 0);
-    printf("[!] Response done.\n\n");
+void send_500_response(SOCKET socket) {
+    char response[1024];
+    sprintf(response, server_side_error, strlen(server_side_error));
+    send(socket, response, strlen(response), 0);
+    print("500 server side error.");
 }
 
 char* get_current_datetime() {
@@ -256,4 +290,37 @@ char* get_current_datetime() {
     char* datetime = (char*) malloc(100 * sizeof(char));
     strftime(datetime, 100, "%Y-%m-%d %H:%M:%S", local_time);
     return datetime;
+}
+
+// normal request
+void send_200_http_response(FILE *file, SOCKET socket, const char *content_type, size_t content_length) {
+    // send header with range and content length (for video html stream content)
+    char header[1024];
+    sprintf(header, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %I64d\r\n\r\n", content_type, content_length);
+    send(socket, header, strlen(header), 0);
+    stream_file_content(file, socket);
+
+    print("[!] Done");
+}
+
+// for partial content
+void send_206_http_response(FILE *file, SOCKET socket, const char *content_type, size_t file_size, size_t start, size_t end) {
+    // seek the file to the specified rangue before send
+    fseek(file, start, SEEK_SET);
+    size_t contentLength = end - start + 1;
+
+    // Check if the requested range is within the file size
+    if (start > file_size || end > file_size) {
+        print("[!] Error: requested range is out of bounds.");
+        return;
+    }
+
+    // send header with range and content length (for video html stream content)
+    char header[1024];
+    sprintf(header, "HTTP/1.1 206 Partial Content\r\nContent-Type: %s\r\nContent-Range: bytes %I64d-%I64d/%I64d\r\nContent-Length: %I64d\r\n\r\n", 
+        content_type, start, end, file_size, contentLength);
+    send(socket, header, strlen(header), 0);
+    stream_file_content(file, socket);
+
+    printf("[!] Done at %s.\n", get_current_datetime());
 }
