@@ -1,15 +1,29 @@
 // Writted by hwpoison
 #include <stdio.h>
-#include <stdlib.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <unistd.h>
 #include <time.h>
 
-#include <winsock2.h>
+#ifdef __linux__
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    typedef int SocketType;
+    #define SIZE_T_FORMAT "%zu"
+    #define SEND_D_FLAG MSG_NOSIGNAL // avoid SIGPIPE signal
+#else
+    #include <winsock2.h>
+    typedef SOCKET SocketType;
+    #define SIZE_T_FORMAT "%Iu"
+    #define SEND_D_FLAG 0
+#endif
 
-#define BUFFER_SIZE 1024
-#define MAX_PATH_LENGTH 400
+#define PRINT
+
+#define BUFFER_SIZE 10000 // 10kb
+#define MAX_PATH_LENGTH 30
 #define MAX_MIME_TYPES 30
 
 typedef struct {
@@ -26,35 +40,36 @@ size_t get_file_length(FILE *file);
 
 void print(const char* msg, ...);
 
-
 // response functions
-void send_404_response(SOCKET socket);
-void send_500_response(SOCKET socket);
-void send_200_http_response(FILE *file, SOCKET socket, const char *content_type, size_t content_length);
-void send_206_http_response(FILE *file, SOCKET socket, const char *content_type, size_t file_size, size_t start, size_t end);
-void stream_file_content(FILE *file, SOCKET socket);
+void send_404_response(SocketType  socket);
+void send_500_response(SocketType  socket);
+void send_200_http_response(FILE *file, SocketType  socket, const char *content_type, size_t content_length);
+void send_206_http_response(FILE *file, SocketType  socket, const char *content_type, size_t file_size, size_t start, size_t end);
+void send_file_chunks(FILE *file, SocketType  socket);
+void close_socket(SocketType socket);
 
 int main(int argc, char *argv[]) {
-    WSADATA wsaData;
-    SOCKET server_socket, new_client_socket;
-
+    int port;
+    char buffer[BUFFER_SIZE] = {0};
+    char tmpbuff[BUFFER_SIZE] = {0};
+    char *input_filename, *file_to_serve_path, *client_ip;
+    size_t file_size, start_offset, end_offset;
     struct sockaddr_in address;
     int addrlen = sizeof(address);
-    int port;
 
-    char buffer[BUFFER_SIZE] = {0};
-    char *input_filename, *file_to_serve_path;
-    size_t start_offset, end_offset;
-    size_t file_size;
-    char tmpbuff[BUFFER_SIZE] = {0};
+    // Socket vars declaration
+    #ifdef _WIN32
+        WSADATA wsaData;
+    #endif
+
+    SocketType server_socket, new_client_socket;
     
-
     if (argc < 2 || argc == 1) {
         printf("Usage: %s <port> <file_name.html>\n\
         If file name is not specified, all content of the current dir will be served.\n", argv[0]);
         return 1;
     }
-    printf("-> Welcome to tinyC!\n");
+    print("####  Welcome to tinyC!  ####");
 
     // extract args
     input_filename = argv[2];
@@ -64,33 +79,35 @@ int main(int argc, char *argv[]) {
       print("[+] Serving only %s file.", input_filename);
     }
 
-    // winsock init
+    #ifdef _WIN32
+        // winsock init
+        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+            perror("Error with winsock");
+            exit(EXIT_FAILURE);
+        }
+    #endif
+
     print("Initializing server socket.");
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        perror("Error with winsock");
+    // create server socket
+    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("Error al crear el socket");
         exit(EXIT_FAILURE);
     }
 
-    // create the socket
-    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-        perror("Error to create the socket");
-        exit(EXIT_FAILURE);
-    }
-
-    // setup the socket
+    // set up the socket
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(port);
 
     // bind addr and port
-    if (bind(server_socket, (struct sockaddr *)&address, sizeof(address)) == SOCKET_ERROR) {
+    if (bind(server_socket, (struct sockaddr*)&address, sizeof(address)) < 0) {
         perror("[x] Error binding the socket to address and port.");
         exit(EXIT_FAILURE);
     }
 
-    // listen incoming connections
-    if (listen(server_socket, 3) == SOCKET_ERROR) {
-        perror("Error to listen.");
+    // start to listen incoming connections
+    if (listen(server_socket, 3) < 0) {
+        perror("Error to listen connections.");
         exit(EXIT_FAILURE);
     }
     print("Listening on :%d port...", port);
@@ -98,24 +115,29 @@ int main(int argc, char *argv[]) {
     // accept incoming connections and handle it (1 per time)
     while (1) {
         // the client make a request to the server and a socket connection is created and stablished
-        if ((new_client_socket = accept(server_socket, (struct sockaddr *)&address, &addrlen)) == INVALID_SOCKET) {
-            perror("[x] Error accepting the connection");
-            exit(EXIT_FAILURE);
-        }
-
-        // get client ip address
-        char *ip = inet_ntoa(address.sin_addr);
-        print("Petition incoming  from %s", ip);
+        #ifdef __linux__
+            if ((new_client_socket = accept(server_socket, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
+        #else
+            if ((new_client_socket = accept(server_socket, (struct sockaddr *)&address, &addrlen)) == INVALID_SOCKET) {
+        #endif
+                perror("[x] Error accepting the connection");
+                exit(EXIT_FAILURE);
+            }
 
         // Read the HTTP request content
-        recv(new_client_socket, buffer, BUFFER_SIZE, 0);
-        print("Client Request:\n %s\n== End of Client request ==", buffer);
-
+        #ifdef __linux__
+            read(new_client_socket, buffer, BUFFER_SIZE);
+        #else
+            client_ip = inet_ntoa(address.sin_addr);
+            print("Petition incoming  from %s", client_ip);
+            recv(new_client_socket, buffer, BUFFER_SIZE, 0);
+        #endif
+        print("\n == Client Request content ==\n %s\n== End of Client request ==\n", buffer);
 
         // If file to serve was not specified, serve all dir content
         strcpy(tmpbuff, buffer);
         if(input_filename == NULL){
-          // Extract the uri content (ex: /image.jpg)
+          // Extract the uri content from request content (ex: /image.jpg)
           char *path_start = strchr(tmpbuff, ' ') + 1; 
           char *path_end = strchr(path_start, ' ');  
           
@@ -141,12 +163,12 @@ int main(int argc, char *argv[]) {
             file_size = get_file_length(file);
             start_offset = 0;
             end_offset = file_size - 1;
-
+            print("Size:"SIZE_T_FORMAT, file_size);
             // Check if the request is has a "Range" header and extract range to stream
-            char* range_header = strstr(buffer, "Range: ");
+            char* range_header = strstr(buffer, "Range: bytes=");
             if (range_header != NULL) {
-                sscanf(range_header, "Range: bytes=%I64d-%I64d", &start_offset, &end_offset);
-                print("Range detected: from %I64d to %I64d", start_offset, end_offset);
+                sscanf(range_header, "Range: bytes="SIZE_T_FORMAT"-"SIZE_T_FORMAT"", &start_offset, &end_offset);
+                print("Range detected: from %I64d to " SIZE_T_FORMAT, start_offset, end_offset);
                 send_206_http_response(
                     file, 
                     new_client_socket, 
@@ -161,16 +183,27 @@ int main(int argc, char *argv[]) {
                     get_filename_mimetype(file_to_serve_path),
                     file_size);
             }
+            fclose(file);
           }
         // close client socket connection 
-        closesocket(new_client_socket);
+        close_socket(new_client_socket);
     }
     // close server socket and release memory
-    closesocket(server_socket);
-    WSACleanup();
+    close_socket(server_socket);
+
+    #ifdef _WIN32
+        WSACleanup();
+    #endif
     return 0;
 }
 
+void close_socket(SocketType socket) {
+    #ifdef __linux__
+        close(socket);
+    #else 
+        closesocket(socket);
+    #endif
+}
 // all supported mimetypes
 MimeType mime_types[MAX_MIME_TYPES] = {
     { ".html", "text/html" },
@@ -182,7 +215,7 @@ MimeType mime_types[MAX_MIME_TYPES] = {
     { ".xml", "application/xml" },
     { ".gif", "image/gif" },
     { ".jpeg", "image/jpeg" },
-    { ".mkv",  "video/mp4"},
+    { ".mkv",  "video/x-matroska"},
     { ".flac",  "audio/flac"},
     { ".mp3",  "audio/mp3"},
     { ".jpg", "image/jpeg" },
@@ -217,14 +250,16 @@ const char *server_side_error =
     "</body></html>";
 
 void print(const char* msg, ...) {
-    va_list args;
-    va_start(args, msg);
+    #ifdef PRINT
+        va_list args;
+        va_start(args, msg);
 
-    printf("[%s] ", get_current_datetime());
-    vprintf(msg, args);
-    printf("\n");
+        printf("[%s] ", get_current_datetime());
+        vprintf(msg, args);
+        printf("\n");
 
-    va_end(args);
+        va_end(args);
+    #endif
 }
 
 size_t get_file_length(FILE *file){
@@ -234,14 +269,13 @@ size_t get_file_length(FILE *file){
     return fileLength;
 }
 
-void stream_file_content(FILE *file, SOCKET socket){
+void send_file_chunks(FILE *file, SocketType  socket){
     char buffer[BUFFER_SIZE];
     size_t bytesRead;
-    // stream file content
     while ((bytesRead = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
-        if (send(socket, buffer, bytesRead, 0) == -1) {
-            break; 
-        }   
+        if(send(socket, buffer, bytesRead, SEND_D_FLAG ) == -1){
+            break;
+        }
     }
 }
 
@@ -261,21 +295,20 @@ const char *get_filename_extension(const char *path) {
 const char *get_filename_mimetype(const char *path) {
     const char *extension = get_filename_extension(path);
     for (int i = 0; mime_types[i].extension != NULL; i++) {
-        if (strcmp(mime_types[i].extension, extension) == 0) { // improve this shit!
+        if (strcmp(mime_types[i].extension, extension) == 0) // improve this shit!
             return mime_types[i].mime_type;
-        }
     }
     return "application/octet-stream"; // default mimetype
 }
 
-void send_404_response(SOCKET socket) {
+void send_404_response(SocketType  socket) {
     char response[1024];
     sprintf(response, not_found_response, strlen(not_found_response));
-    send(socket, response, strlen(response), 0);
+    send(socket, response, strlen(response)+1, 0);
     print("404 not found.");
 }
 
-void send_500_response(SOCKET socket) {
+void send_500_response(SocketType  socket) {
     char response[1024];
     sprintf(response, server_side_error, strlen(server_side_error));
     send(socket, response, strlen(response), 0);
@@ -293,18 +326,18 @@ char* get_current_datetime() {
 }
 
 // normal request
-void send_200_http_response(FILE *file, SOCKET socket, const char *content_type, size_t content_length) {
+void send_200_http_response(FILE *file, SocketType  socket, const char *content_type, size_t content_length) {
     // send header with range and content length (for video html stream content)
     char header[1024];
-    sprintf(header, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %I64d\r\n\r\n", content_type, content_length);
+    sprintf(header, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: " SIZE_T_FORMAT "\r\n\r\n", content_type, content_length);
     send(socket, header, strlen(header), 0);
-    stream_file_content(file, socket);
-
-    print("[!] Done");
+    print("Response header: %s", header );
+    send_file_chunks(file, socket);
+    print("Response Done.\n");
 }
 
 // for partial content
-void send_206_http_response(FILE *file, SOCKET socket, const char *content_type, size_t file_size, size_t start, size_t end) {
+void send_206_http_response(FILE *file, SocketType  socket, const char *content_type, size_t file_size, size_t start, size_t end) {
     // seek the file to the specified rangue before send
     fseek(file, start, SEEK_SET);
     size_t contentLength = end - start + 1;
@@ -317,10 +350,9 @@ void send_206_http_response(FILE *file, SOCKET socket, const char *content_type,
 
     // send header with range and content length (for video html stream content)
     char header[1024];
-    sprintf(header, "HTTP/1.1 206 Partial Content\r\nContent-Type: %s\r\nContent-Range: bytes %I64d-%I64d/%I64d\r\nContent-Length: %I64d\r\n\r\n", 
+    sprintf(header, "HTTP/1.1 206 Partial Content\r\nContent-Type: %s\r\nContent-Range: bytes " SIZE_T_FORMAT "-"SIZE_T_FORMAT"/"SIZE_T_FORMAT"\r\nContent-Length: "SIZE_T_FORMAT"\r\n\r\n", 
         content_type, start, end, file_size, contentLength);
     send(socket, header, strlen(header), 0);
-    stream_file_content(file, socket);
-
-    printf("[!] Done at %s.\n", get_current_datetime());
+    send_file_chunks(file, socket);
+    print("Response done.\n");
 }
