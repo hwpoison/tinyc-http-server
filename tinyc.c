@@ -25,6 +25,7 @@
 #define BUFFER_SIZE 10000 // 10kb
 #define MAX_PATH_LENGTH 30
 #define MAX_MIME_TYPES 30
+#define DEFAULT_PORT 8081
 
 typedef struct {
     const char *extension;
@@ -48,11 +49,24 @@ void send_206_http_response(FILE *file, SocketType  socket, const char *content_
 void send_file_chunks(FILE *file, SocketType  socket);
 void close_socket(SocketType socket);
 
+
+char* get_arg_value(int argc, char **argv, char *target_arg){
+    for(int arg_idx = 0; arg_idx < argc; arg_idx++){
+        if(!strcmp(argv[arg_idx], target_arg)){
+            if(argv[arg_idx+1]==NULL)
+               return "";
+            else
+                return argv[arg_idx+1];
+        }
+    }
+    return NULL;
+}
+
 int main(int argc, char *argv[]) {
     int port;
     char buffer[BUFFER_SIZE] = {0};
     char tmpbuff[BUFFER_SIZE] = {0};
-    char *input_filename, *file_to_serve_path, *client_ip;
+    char *input_port, *input_filename, *file_to_serve_path, *client_ip;
     size_t file_size, start_offset, end_offset;
     struct sockaddr_in address;
     int addrlen = sizeof(address);
@@ -61,20 +75,30 @@ int main(int argc, char *argv[]) {
     #ifdef _WIN32
         WSADATA wsaData;
     #endif
-
-    SocketType server_socket, new_client_socket;
     
-    if (argc < 2 || argc == 1) {
-        printf("Usage: %s <port> <file_name.html>\n\
-        If file name is not specified, all content of the current dir will be served.\n", argv[0]);
-        return 1;
+    SocketType server_socket, new_client_socket;
+
+
+    if(get_arg_value(argc, argv, "--help") != NULL){
+        printf("-------- TinyC server (by hwpoison) -------- \n"
+            "Usage: %s --port <port> --file <file_name.html>\n"
+            " ex: tinyc.exe --port 3543 --file index.html\n"
+            " - Default port is %d\n"
+            " - If file is doesn't specified, will serve all dir content.\n", argv[0], DEFAULT_PORT);
+        return 0;
     }
+
+
     print("####  Welcome to tinyC!  ####");
+    
+    // get port from args
+    if((input_port= get_arg_value(argc, argv, "--port"))==NULL)
+        port = DEFAULT_PORT;
+    else
+        port = atoi(input_port);
 
-    // extract args
-    input_filename = argv[2];
-    port = atoi(argv[1]);
-
+    // get filename from args
+    input_filename = get_arg_value(argc, argv, "--file");
     if(input_filename!=NULL){
       print("[+] Serving only %s file.", input_filename);
     }
@@ -101,7 +125,8 @@ int main(int argc, char *argv[]) {
 
     // bind addr and port
     if (bind(server_socket, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        perror("[x] Error binding the socket to address and port.");
+        print("[x] Error binding the socket to address and port %d.", port);
+        perror("Caused by ");
         exit(EXIT_FAILURE);
     }
 
@@ -127,11 +152,13 @@ int main(int argc, char *argv[]) {
         // Read the HTTP request content
         #ifdef __linux__
             read(new_client_socket, buffer, BUFFER_SIZE);
+            client_ip =":";
         #else
-            client_ip = inet_ntoa(address.sin_addr);
-            print("Petition incoming  from %s", client_ip);
             recv(new_client_socket, buffer, BUFFER_SIZE, 0);
+            client_ip = inet_ntoa(address.sin_addr);
         #endif
+
+        print("Petition incoming  from %s", client_ip);
         print("\n == Client Request content ==\n %s\n== End of Client request ==\n", buffer);
 
         // If file to serve was not specified, serve all dir content
