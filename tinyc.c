@@ -22,7 +22,8 @@
 
 #define PRINT
 
-#define BUFFER_SIZE 10000 // 10kb
+#define MAX_HEADER_SIZE 1024
+#define BUFFER_SIZE 5000 // 5kb
 #define MAX_PATH_LENGTH 30
 #define MAX_MIME_TYPES 30
 #define DEFAULT_PORT 8081
@@ -44,40 +45,36 @@ void print(const char* msg, ...);
 // response functions
 void send_404_response(SocketType  socket);
 void send_500_response(SocketType  socket);
+void send_response(SocketType socket, const char *response_content);
 void send_200_http_response(FILE *file, SocketType  socket, const char *content_type, size_t content_length);
 void send_206_http_response(FILE *file, SocketType  socket, const char *content_type, size_t file_size, size_t start, size_t end);
-void send_file_chunks(FILE *file, SocketType  socket);
+void send_file_in_chuncks(FILE *file, SocketType  socket);
 void close_socket(SocketType socket);
 
-
 char* get_arg_value(int argc, char **argv, char *target_arg){
+    if(argc>=255) 
+        return NULL;
     for(int arg_idx = 0; arg_idx < argc; arg_idx++){
-        if(!strcmp(argv[arg_idx], target_arg)){
-            if(argv[arg_idx+1]==NULL)
-               return "";
-            else
-                return argv[arg_idx+1];
-        }
+        if(!strcmp(argv[arg_idx], target_arg))
+            return argv[arg_idx+1]==NULL?"":argv[arg_idx+1];
     }
     return NULL;
 }
 
 int main(int argc, char *argv[]) {
-    int port;
+    int port = 0;
     char buffer[BUFFER_SIZE] = {0};
-    char tmpbuff[BUFFER_SIZE] = {0};
+    char tmpbuffer[BUFFER_SIZE] = {0};
     char *input_port, *input_filename, *file_to_serve_path, *client_ip;
     size_t file_size, start_offset, end_offset;
-    struct sockaddr_in address;
-    int addrlen = sizeof(address);
 
     // Socket vars declaration
+    struct sockaddr_in address;
+    int addrlen = sizeof(address);
+    SocketType server_socket, new_client_socket;
     #ifdef _WIN32
         WSADATA wsaData;
     #endif
-    
-    SocketType server_socket, new_client_socket;
-
 
     if(get_arg_value(argc, argv, "--help") != NULL){
         printf("-------- TinyC server (by hwpoison) -------- \n"
@@ -88,18 +85,17 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-
     print("####  Welcome to tinyC!  ####");
     
     // get port from args
-    if((input_port= get_arg_value(argc, argv, "--port"))==NULL)
+    if((input_port= get_arg_value(argc, argv, "--port")) == NULL)
         port = DEFAULT_PORT;
     else
         port = atoi(input_port);
 
     // get filename from args
     input_filename = get_arg_value(argc, argv, "--file");
-    if(input_filename!=NULL){
+    if(input_filename != NULL){
       print("[+] Serving only %s file.", input_filename);
     }
 
@@ -138,7 +134,7 @@ int main(int argc, char *argv[]) {
     print("Listening on :%d port...", port);
 
     // accept incoming connections and handle it (1 per time)
-    while (1) {
+    for(;;) {
         // the client make a request to the server and a socket connection is created and stablished
         #ifdef __linux__
             if ((new_client_socket = accept(server_socket, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
@@ -158,16 +154,14 @@ int main(int argc, char *argv[]) {
             client_ip = inet_ntoa(address.sin_addr);
         #endif
 
-        print("Petition incoming  from %s", client_ip);
+        print(" ## Petition incoming  from %s", client_ip);
         print("\n == Client Request content ==\n %s\n== End of Client request ==\n", buffer);
-
+        strcpy(tmpbuffer, buffer);
         // If file to serve was not specified, serve all dir content
-        strcpy(tmpbuff, buffer);
         if(input_filename == NULL){
           // Extract the uri content from request content (ex: /image.jpg)
-          char *path_start = strchr(tmpbuff, ' ') + 1; 
+          char *path_start = strchr(tmpbuffer, ' ') + 1; // always are in the start of request. 
           char *path_end = strchr(path_start, ' ');  
-          
           if (path_start != NULL && path_end != NULL) {
               *path_end = '\0';
               file_to_serve_path = path_start;
@@ -195,7 +189,7 @@ int main(int argc, char *argv[]) {
             char* range_header = strstr(buffer, "Range: bytes=");
             if (range_header != NULL) {
                 sscanf(range_header, "Range: bytes="SIZE_T_FORMAT"-"SIZE_T_FORMAT"", &start_offset, &end_offset);
-                print("Range detected: from %I64d to " SIZE_T_FORMAT, start_offset, end_offset);
+                print("Range detected: from "SIZE_T_FORMAT" to " SIZE_T_FORMAT, start_offset, end_offset);
                 send_206_http_response(
                     file, 
                     new_client_socket, 
@@ -217,7 +211,6 @@ int main(int argc, char *argv[]) {
     }
     // close server socket and release memory
     close_socket(server_socket);
-
     #ifdef _WIN32
         WSACleanup();
     #endif
@@ -231,6 +224,7 @@ void close_socket(SocketType socket) {
         closesocket(socket);
     #endif
 }
+
 // all supported mimetypes
 MimeType mime_types[MAX_MIME_TYPES] = {
     { ".html", "text/html" },
@@ -268,7 +262,7 @@ const char *not_found_response =
     "<p>The requested resource was not found on this server.</p>"
     "</body></html>";
 
-const char *server_side_error =
+const char *server_side_error_response =
     "HTTP/1.1 500 Internal Server Error\r\n"
     "Content-Type: text/html\r\n"
     "Content-Length: %d\r\n\r\n<html>"
@@ -296,11 +290,13 @@ size_t get_file_length(FILE *file){
     return fileLength;
 }
 
-void send_file_chunks(FILE *file, SocketType  socket){
+void send_file_in_chuncks(FILE *file, SocketType  to_socket){
     char buffer[BUFFER_SIZE];
     size_t bytesRead;
     while ((bytesRead = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
-        if(send(socket, buffer, bytesRead, SEND_D_FLAG ) == -1){
+        if(send(to_socket, buffer, bytesRead, SEND_D_FLAG ) == -1){
+            perror("File send interrupted:");
+            close_socket(to_socket);
             break;
         }
     }
@@ -322,23 +318,23 @@ const char *get_filename_extension(const char *path) {
 const char *get_filename_mimetype(const char *path) {
     const char *extension = get_filename_extension(path);
     for (int i = 0; mime_types[i].extension != NULL; i++) {
-        if (strcmp(mime_types[i].extension, extension) == 0) // improve this shit!
+        if (strcmp(mime_types[i].extension, extension) == 0)
             return mime_types[i].mime_type;
     }
     return "application/octet-stream"; // default mimetype
 }
 
+void send_response(SocketType socket, const char *response_content) {
+    send(socket, response_content, strlen(response_content), 0);
+}
+
 void send_404_response(SocketType  socket) {
-    char response[1024];
-    sprintf(response, not_found_response, strlen(not_found_response));
-    send(socket, response, strlen(response)+1, 0);
+    send_response(socket, not_found_response);
     print("404 not found.");
 }
 
 void send_500_response(SocketType  socket) {
-    char response[1024];
-    sprintf(response, server_side_error, strlen(server_side_error));
-    send(socket, response, strlen(response), 0);
+    send_response(socket, server_side_error_response);
     print("500 server side error.");
 }
 
@@ -352,18 +348,17 @@ char* get_current_datetime() {
     return datetime;
 }
 
-// normal request
+// send header with range and content length
 void send_200_http_response(FILE *file, SocketType  socket, const char *content_type, size_t content_length) {
-    // send header with range and content length (for video html stream content)
-    char header[1024];
+    char header[MAX_HEADER_SIZE];
     sprintf(header, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: " SIZE_T_FORMAT "\r\n\r\n", content_type, content_length);
-    send(socket, header, strlen(header), 0);
+    send_response(socket, header);
     print("Response header: %s", header );
-    send_file_chunks(file, socket);
+    send_file_in_chuncks(file, socket);
     print("Response Done.\n");
 }
 
-// for partial content
+// response of partial content that use content range for send binary content from x to y offset.
 void send_206_http_response(FILE *file, SocketType  socket, const char *content_type, size_t file_size, size_t start, size_t end) {
     // seek the file to the specified rangue before send
     fseek(file, start, SEEK_SET);
@@ -376,10 +371,10 @@ void send_206_http_response(FILE *file, SocketType  socket, const char *content_
     }
 
     // send header with range and content length (for video html stream content)
-    char header[1024];
+    char header[MAX_HEADER_SIZE];
     sprintf(header, "HTTP/1.1 206 Partial Content\r\nContent-Type: %s\r\nContent-Range: bytes " SIZE_T_FORMAT "-"SIZE_T_FORMAT"/"SIZE_T_FORMAT"\r\nContent-Length: "SIZE_T_FORMAT"\r\n\r\n", 
         content_type, start, end, file_size, contentLength);
-    send(socket, header, strlen(header), 0);
-    send_file_chunks(file, socket);
+    send_response(socket, header);
+    send_file_in_chuncks(file, socket);
     print("Response done.\n");
 }
