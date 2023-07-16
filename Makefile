@@ -1,31 +1,26 @@
 CC = gcc
-CFLAGS = -Wall
+CFLAGS = -Wall -O3 
 LDFLAGS = 
+LDFLAGS_PTHREAD = -DMULTITHREAD_ON
 
 ifdef OS
-    ifeq ($(OS), Windows_NT) # Windows
+    ifeq ($(OS), Windows_NT) # On windows
         LDFLAGS += -lws2_32
     endif
 else
-    UNAME_S := $(shell uname -s) # Linux
-    ifeq ($(UNAME_S), Linux)
-        LDFLAGS += 
-    endif
+        LDFLAGS_PTHREAD += -lpthread
 endif
 
 SRCS = tinyc.c
-OBJS = $(SRCS:.c=.o)
 TARGET = tinyc
 
 .PHONY: all clean
 
-all: $(TARGET)
+mono:
+	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET)_monothread $(LDFLAGS)
 
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) $(OBJS) -o $(TARGET) $(LDFLAGS)
-
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+multithread:
+	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET)_multithread $(LDFLAGS) $(LDFLAGS_PTHREAD)
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f $(TARGET)
