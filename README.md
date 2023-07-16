@@ -9,7 +9,7 @@ Is a lightweight web server written in C using sockets. Compilable for Windows a
 ## Basic usage
 Usage:
 ```sh
-tinyc.exe --port <port> --file <file_name>
+tinyc.exe --port <port> --folder <folder_path>
 ```
 Example:
 ```sh
