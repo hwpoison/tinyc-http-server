@@ -18,6 +18,7 @@
     #include <sys/socket.h>
     #include <netinet/in.h>
     #include <sys/time.h>
+    #include <arpa/inet.h>
     
     typedef int32_t SocketType;
     #define SIZE_T_FORMAT "%zu"
@@ -31,16 +32,19 @@
     #define SEND_D_FLAG 0
 #endif
 
+#define TRUE  1
+#define FALSE 0
+
 #define MAX_HEADER_SIZE 1024
 #define BUFFER_SIZE 10000 // 10kb
 #define MAX_PATH_LENGTH 30
-#define MAX_THREADS 8
+#define MAX_THREADS 250
 #define MAX_MIME_TYPES 30
 #define DEFAULT_PORT 8081 // server default server
-#define SERVER_BACKLOG 8 // server max listen connections
-#define CLIENT_TIMEOUT 5
+#define SERVER_BACKLOG 250 // server max listen connections
+#define CLIENT_TIMEOUT 4
 
-int8_t print_all = 1;
+int8_t print_all = TRUE;
 
 typedef struct {
     const char *extension;
@@ -62,8 +66,9 @@ const char *get_filename_extension(const char* file_path);
 const char *get_filename_mimetype(const char *path);
 void remove_slash_from_start(char* str);
 int starts_with(const char *str, const char *word);
-size_t get_file_length(FILE *file);
+size_t get_file_length(const char* filename);
 char* get_arg_value(int argc, char **argv, char *target_arg);
+char *extract_URI_from_header(char *header_content);
 
 void print(const char* msg, ...);
 
