@@ -9,7 +9,7 @@ Is a lightweight web server written in C using sockets. Compilable for Windows a
 
 ## Basic usage
 Usage:
-```sh
+```sha
 tinyc.exe --port <port> --folder <folder_path>
 ```
 Example:
@@ -31,8 +31,9 @@ Options:
         --port <port_number>: Port number. Default is 8081
         --backlog <number>: Max server listener.
         --max-threads <number>: Max server threads.
-        --default-redirect <file_path>: redirect / to default file route.
+        --default-redirect <file_path>/: redirect / to default file route. ex: simple_web/index.html
         --no-print : No print log (less consumption).
+        --no-file-explorer: Disable file explorer.
 ```
 * If you dont specify any args, servers will run on localhost:8081 by default serving executable location content.
 
@@ -42,3 +43,5 @@ Has two versions, default multithread (all) using pthread and monothread using n
 make all
 make monothread
 ```
+
+**TODO: add utf-8 support**
