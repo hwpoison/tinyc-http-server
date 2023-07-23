@@ -1,28 +1,34 @@
-# TinyC http-server
+## TinyC http-server
+
 #### A very basic HTTP server in C
-<center>
+
 Is a lightweight web server written in C using sockets. Compilable for Windows and Linux for server static content and media files.
 
-
 ![](https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/HTTP_logo.svg/320px-HTTP_logo.svg.png)
-</center>
 
 ## Basic usage
+
 Usage:
-```sh
+
+```plaintext
 tinyc.exe --port <port> --folder <folder_path>
 ```
+
 Example:
-```sh
+
+```plaintext
 tinyc.exe --port 5656 --folder /simple_web --backlog 4 --no-print
 ```
+
 For help usage:
-```sh
+
+```plaintext
 tinyc.exe --help
 ```
 
 ## Options
-```sh
+
+```plaintext
 Basic usage: tinyc --port 8081 --folder /my_web
  example: tinyc --port 3543 --folder simple_web/index.html
 
@@ -31,14 +37,24 @@ Options:
         --port <port_number>: Port number. Default is 8081
         --backlog <number>: Max server listener.
         --max-threads <number>: Max server threads.
-        --default-redirect <file_path>: redirect / to default file route.
+        --default-redirect <file_path>/: redirect / to default file route. ex: simple_web/index.html
         --no-print : No print log (less consumption).
+        --no-file-explorer: Disable file explorer.
 ```
-* If you dont specify any args, servers will run on localhost:8081 by default serving executable location content.
+
+*   If you dont specify any args, servers will run on localhost:8081 by default serving executable location content.
 
 ## How to build
+
 Has two versions, default multithread (all) using pthread and monothread using nothing (monothread).
-```sh
+
+```plaintext
 make all
 make monothread
 ```
+
+## **Tested on**
+
+<table><tbody><tr><td>Windows</td><td>GCC</td><td>gcc (x86_64-posix-seh, Built by strawberryperl.com project) 8.3.0</td></tr><tr><td>Linux</td><td>GCC</td><td>gcc (Ubuntu 9.4.0-1ubuntu1~20.04.1) 9.4.0</td></tr></tbody></table>
+
+**TODO: add utf-8 support**
