@@ -6,6 +6,10 @@ Is a lightweight web server written in C using sockets. Compilable for Windows a
 
 ![](https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/HTTP_logo.svg/320px-HTTP_logo.svg.png)
 
+![](https://33333.cdn.cke-cs.com/kSW7V9NHUXugvhoQeFaf/images/4c71bc4915d69624d517457348bd0606d35ca8d95bdce915.png)
+
+![](https://33333.cdn.cke-cs.com/kSW7V9NHUXugvhoQeFaf/images/94337eed51622ef148d3bea1bd737bb964757bc59a8e612a.png)
+
 ## Basic usage
 
 Usage:
@@ -34,11 +38,12 @@ Basic usage: tinyc --port 8081 --folder /my_web
 
 Options:
         --folder <folder_path>: Folder to serve. By default serve all executable location dir content.
+        --ip: Set server IP. Default: ANY (Local/Network).
         --port <port_number>: Port number. Default is 8081
         --backlog <number>: Max server listener.
         --max-threads <number>: Max server threads.
         --default-redirect <file_path>/: redirect / to default file route. ex: simple_web/index.html
-        --no-print : No print log (less consumption).
+        --no-print : No print log (less mem consumption).
         --no-file-explorer: Disable file explorer.
 ```
 
@@ -55,6 +60,6 @@ make monothread
 
 ## **Tested on**
 
-<table><tbody><tr><td>Windows</td><td>GCC</td><td>gcc (x86_64-posix-seh, Built by strawberryperl.com project) 8.3.0</td></tr><tr><td>Linux</td><td>GCC</td><td>gcc (Ubuntu 9.4.0-1ubuntu1~20.04.1) 9.4.0</td></tr></tbody></table>
+<table><tbody><tr><td>Windows</td><td>GCC</td><td>gcc (x86_64-posix-seh-rev1, Built by MinGW-Builds project) 13.1.0</td></tr><tr><td>Linux</td><td>GCC</td><td>gcc (Ubuntu 9.4.0-1ubuntu1~20.04.1) 9.4.0</td></tr></tbody></table>
 
 **TODO: add utf-8 support**

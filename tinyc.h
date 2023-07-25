@@ -29,7 +29,7 @@
     #include <windows.h>
 
     typedef SOCKET SocketType;
-    #define SIZE_T_FORMAT "%Iu"
+    #define SIZE_T_FORMAT "%Illu"
     #define SEND_D_FLAG 0
 #endif
 
@@ -37,17 +37,17 @@
 #define FALSE 0
 
 #define MAX_HEADER_SIZE 1024
-#define BUFFER_SIZE 10000 // 10kb
-#define MAX_PATH_LENGTH 30
+#define BUFFER_SIZE 40000       // 40kb
+#define MAX_PATH_LENGTH 400
 #define MAX_THREADS 250
 #define MAX_MIME_TYPES 30
-#define DEFAULT_PORT 8081 // server default server
-#define SERVER_BACKLOG 250 // server max listen connections
+#define DEFAULT_PORT 8081       // server default server
+#define SERVER_BACKLOG 250      // server max listen connections
 #define CLIENT_TIMEOUT 15
-#define EXPLORER_MAX_FILES 2048
+#define EXPLORER_MAX_FILES 2048 // max amount of files that explorer print
 #define EXPLORER_MAX_FILENAME_LENGTH 500
 
-int8_t print_all = TRUE; // show all server output 
+int8_t print_output = TRUE; // show all server output 
 
 typedef struct {
     const char *extension;
@@ -73,9 +73,9 @@ const char *get_filename_mimetype(const char *path);
 void remove_slash_from_start(char* str);
 int starts_with(const char *str, const char *word);
 size_t get_file_length(const char* filename);
-char* get_arg_value(int argc, char **argv, char *target_arg);
+char *get_arg_value(int argc, char **argv, char *target_arg);
 char *extract_URI_from_header(char *header_content);
-void* safe_malloc(size_t size);
+void *safe_malloc(size_t size);
 char **get_list_file(const char* path, size_t *file_amount);
 void normalize_path(char* str);
 void concatenate_string(char** str, const char* new_str);
@@ -83,13 +83,13 @@ void set_shell_text_color(const char* color);
 void print_tinyc_welcome_logo();
 
 // Response functions
-void send_response(const char *response_content, SocketType socket);
+void send_response(SocketType socket, const char *response_content);
 void send_404_response(SocketType  socket); //  not found
 void send_500_response(SocketType  socket); // internal error
 void send_302_response(SocketType  socket, char *uri) ; // redirection
-void send_200_http_response(FILE *file, SocketType  socket, const char *content_type, size_t content_length);
-void send_206_http_response(FILE *file, SocketType  socket, const char *content_type, size_t file_size, size_t start, size_t end);
-void send_file_in_chuncks(FILE *file, SocketType  socket);
+void send_200_http_response(SocketType  socket, FILE *file, const char *content_type, size_t content_length);
+void send_206_http_response(SocketType  socket, FILE *file, const char *content_type, size_t file_size, size_t start, size_t end);
+void send_file_in_chuncks(SocketType  socket, FILE *file);
 void close_socket(SocketType socket);
 void handle_connection(connection_params *params);
 

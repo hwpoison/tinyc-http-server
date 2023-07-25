@@ -3,7 +3,7 @@
 int main(int argc, char *argv[]) {
     char *input_arg = NULL;
     char *folder_to_serve = NULL, *default_route = NULL;
-    
+    char server_ip[] = "0.0.0.0";
     char client_ip[8] = ":";
 
     int16_t port = DEFAULT_PORT;
@@ -31,11 +31,12 @@ int main(int argc, char *argv[]) {
             " example: %s --port 3543 --folder simple_web/index.html\n"
             "\nOptions:\n"
             "\t--folder <folder_path>: Folder to serve. By default serve all executable location dir content.\n"
+            "\t--ip: Set server IP. Default: ANY (Local/Network).\n"
             "\t--port <port_number>: Port number. Default is %d\n"
             "\t--backlog <number>: Max server listener.\n"
             "\t--max-threads <number>: Max server threads.\n"
             "\t--default-redirect <file_path>/: redirect / to default file route. ex: simple_web/index.html\n"
-            "\t--no-print : No print log (less consumption).\n"
+            "\t--no-print : No print log (less mem consumption).\n"
             "\t--no-file-explorer: Disable file explorer.\n"
             ,argv[0], argv[0], DEFAULT_PORT);
         return 0;
@@ -51,8 +52,11 @@ int main(int argc, char *argv[]) {
     if((input_arg = get_arg_value(argc, argv, "--max-threads")) != NULL)
         max_threads = atoi(input_arg);
 
+    if((input_arg = get_arg_value(argc, argv, "--ip")) != NULL)
+        strcpy(server_ip, input_arg);
+
     if((get_arg_value(argc, argv, "--no-print")) != NULL)
-        print_all = 0;
+        print_output = 0;
 
     if(get_arg_value(argc, argv, "--no-file-explorer") != NULL)
         show_explorer = FALSE;
@@ -64,7 +68,7 @@ int main(int argc, char *argv[]) {
 
     print_tinyc_welcome_logo();
 
-    set_shell_text_color("33");
+    set_shell_text_color("36"); // lightblue
     print(NULL, "Max threads: %d", max_threads);
     print(NULL, "Backlog: %d", backlog);
 
@@ -89,19 +93,19 @@ int main(int argc, char *argv[]) {
 
     // Create server socket
     if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        perror("Error al crear el socket");
+        perror("Error to create server socket.");
         exit(EXIT_FAILURE);
     }
 
     // Set up the socket
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_addr.s_addr = inet_addr(server_ip);
     address.sin_port = htons(port);
 
     #ifdef __linux__
         struct timeval timeout = { .tv_sec = CLIENT_TIMEOUT, .tv_usec = 0};
     #else
-        int timeout = 1000*CLIENT_TIMEOUT;
+        int timeout = 1000*CLIENT_TIMEOUT; // ms to sec for win
     #endif
 
     // Bind addr and port
@@ -116,22 +120,22 @@ int main(int argc, char *argv[]) {
         perror("Error to listen connections.");
         exit(EXIT_FAILURE);
     }
-    print(NULL, "Listening on :%d port...", port);
+    print(NULL, "> Running server at: %s:%d", server_ip, port);
     set_shell_text_color("0");
+
     /* =====================================  */
     /* ======= Accept connections loop =====  */
     /* =====================================  */
-
     for(;;) {
         #ifdef MULTITHREAD_ON
             // Check threads limits
             if(thread_count>=max_threads){
-                print(NULL, "Server too busy...\n");
+                print("error", "Server too busy...\n");
                 for(int i = 0; i < max_threads; i++){
                     pthread_join(active_threads[i], NULL);
                 }
                 thread_count = 0;
-                print(NULL, "All threads free up.\n");
+                print("info", "All threads free up.\n");
             }
         #endif
 
@@ -141,8 +145,8 @@ int main(int argc, char *argv[]) {
         #else
             if ((client_socket = accept(server_socket, (struct sockaddr *)&address, &addrlen)) == INVALID_SOCKET) {
         #endif
-                perror("[x] Error accepting the connection");
-                exit(EXIT_FAILURE);
+                print("error", "Error accepting the connection");
+                continue;
         }
 
         // Get client ip address
@@ -161,7 +165,7 @@ int main(int argc, char *argv[]) {
         }
 
         // Create new thread for handle connection
-        print(NULL, "[%d] Incoming connection from %s",client_socket, client_ip);
+        print("info", "[%d] Incoming connection from %s",client_socket, client_ip);
 
         connection_params *params = safe_malloc(sizeof(connection_params));
         params->socket = client_socket;
@@ -194,7 +198,7 @@ char *get_arg_value(int argc, char **argv, char *target_arg){
     return NULL;
 }
 
-void print_tinyc_welcome_logo(){
+inline void print_tinyc_welcome_logo(){
     set_shell_text_color("32");
     print(NULL, "####  Welcome to tinyC!  ####");
     set_shell_text_color("0");
@@ -205,17 +209,17 @@ void set_shell_text_color(const char* color) {
 }
 
 void print(const char* type, const char* msg, ...) {
-    if (print_all == TRUE) {
+    if (print_output == TRUE) {
         va_list args;
         char* full_date = get_current_datetime();
         va_start(args, msg);
         if (type != NULL) {
             if(!strcmp(type, "error")){
-                set_shell_text_color("32");
+                set_shell_text_color("31");
                 printf("[ERROR][%s] ", full_date);
             }
             if(!strcmp(type, "info")){
-                set_shell_text_color("35");
+                set_shell_text_color("35"); // purple
                 printf("[INFO][%s] ", full_date);
             }
             set_shell_text_color("0");
@@ -226,11 +230,11 @@ void print(const char* type, const char* msg, ...) {
         vprintf(msg, args);
         printf("\n");
         va_end(args);
-        free(full_date);
+        // free(full_date);
     }
 }
 
-void send_206_http_response(FILE *file, SocketType  socket, const char *content_type, size_t file_size, size_t start, size_t end) {
+void send_206_http_response(SocketType  socket, FILE *file, const char *content_type, size_t file_size, size_t start, size_t end) {
     // Seek the file to the specified rangue before send
     fseek(file, start, SEEK_SET);
     // Check if the requested range is within the file size
@@ -242,43 +246,43 @@ void send_206_http_response(FILE *file, SocketType  socket, const char *content_
 
     // Send header with range and content length (for video html stream content)
     char header[MAX_HEADER_SIZE];
-    sprintf(header, "HTTP/1.1 206 Partial Content\r\n"
+    snprintf(header, MAX_HEADER_SIZE, "HTTP/1.1 206 Partial Content\r\n"
                     "Connection: keep-alive\r\n"
                     "Accept-Ranges: bytes\r\n"
                     "Content-Type: %s\r\n"
                     "Content-Range: bytes " SIZE_T_FORMAT "-" SIZE_T_FORMAT "/" SIZE_T_FORMAT "\r\n"
                     "Content-Length: " SIZE_T_FORMAT "\r\n\r\n", content_type, start, end, file_size, end - start + 1);
-    send_response(header, socket);
-    send_file_in_chuncks(file, socket);
+    send_response(socket, header);
+    send_file_in_chuncks(socket, file);
     print("info", "Response 206 done.");
 }
 
-void send_200_http_response(FILE *file, SocketType  socket, const char *content_type, size_t content_length) {
+void send_200_http_response(SocketType  socket, FILE *file, const char *content_type, size_t content_length) {
     char header[MAX_HEADER_SIZE];
-    sprintf(header, "HTTP/1.1 200 OK\r\n"
+    snprintf(header, MAX_HEADER_SIZE, "HTTP/1.1 200 OK\r\n"
                     "Connection: keep-alive\r\n"
                     "Accept-Ranges: bytes\r\n"
                     "Content-Type: %s\r\n"
                     "Content-Length: " SIZE_T_FORMAT "\r\n\r\n", content_type, content_length);
-    send_response(header, socket);
-    send_file_in_chuncks(file, socket);
+    send_response(socket, header);
+    send_file_in_chuncks(socket, file);
     print("info", "Response 200 Done.");
 }
 
 void send_302_response(SocketType  socket, char *uri) {
     char buffer[BUFFER_SIZE];
-    sprintf(buffer, HTTP_302_REDIRECTION, uri);
-    send_response(buffer, socket);
+    snprintf(buffer, MAX_HEADER_SIZE, HTTP_302_REDIRECTION, uri);
+    send_response(socket, buffer);
     print("info", "302 redirection to %s", uri);
 }
 
 void send_404_response(SocketType  socket) {
-    send_response(HTTP_404_NOT_FOUND, socket);
+    send_response(socket, HTTP_404_NOT_FOUND);
     print("info", "404 not found.");
 }
 
 void send_500_response(SocketType  socket) {
-    send_response(HTTP_500_INTERNAL_ERROR, socket);
+    send_response(socket, HTTP_500_INTERNAL_ERROR);
     print("error", "500 server side error.");
 }
 
@@ -312,14 +316,14 @@ int starts_with(const char *str, const char *word) {
     }
 #endif
 
-void send_response(const char *response_content, SocketType to_socket) {
+void send_response(SocketType to_socket, const char *response_content) {
     print(NULL, "Sending %d bytes.", strlen(response_content));
     if(send(to_socket, response_content, strlen(response_content), 0) < 0){
         print(NULL, "Error to sending.\n");
     }
 }
 
-void send_file_in_chuncks(FILE *file, SocketType to_socket){
+void send_file_in_chuncks(SocketType to_socket, FILE *file){
     char buffer[BUFFER_SIZE] = {0};
     size_t bytesRead;
     while ((bytesRead = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
@@ -351,13 +355,17 @@ const char *get_filename_mimetype(const char *path) {
 }
 
 char* get_current_datetime() {
-    time_t current_time;
-    struct tm *local_time;
-    current_time = time(NULL);
-    local_time = localtime(&current_time);
-    char* datetime = (char*) safe_malloc(100 * sizeof(datetime));
-    strftime(datetime, 100, "%Y-%m-%d %H:%M:%S", local_time);
-    return datetime;
+    time_t now;
+    struct tm current_date;
+    static char currenttime[30];
+    time(&now);
+    #ifdef __linux__
+        localtime_r(&now, &current_date);
+    #else 
+        localtime_s(&current_date, &now);
+    #endif
+    strftime(currenttime, sizeof(currenttime), "%Y-%m-%d %H:%M:%S", &current_date);
+    return currenttime;
 }
 
 void close_socket(SocketType socket) {
@@ -366,19 +374,20 @@ void close_socket(SocketType socket) {
     #else 
         closesocket(socket);
     #endif
-    print(NULL, "[%d] Socket closed.", socket);
+    print("info", "[%d] Socket closed.", socket);
 }
 
 char *extract_URI_from_header(char *header_content){
-    char tmpbuffer[BUFFER_SIZE];
-    strcpy(tmpbuffer, header_content);
-    char *path_start, *path_end, *uri;
-    if ((path_start = strchr(tmpbuffer, ' ')) != NULL
-    &&  (path_end = strchr(path_start + 1, ' ')) != NULL) {
-        *path_end = '\0';
-        uri = path_start + 1;
-        print(NULL, "URI found: %s", uri);
-        return uri;
+    char *extracted_uri;
+    char *start, *end;
+    int length;
+    if((start = strchr(header_content, ' ')) != NULL &&
+        (end = strchr(start+1, ' '))!=NULL){
+        length = (end-header_content)-(start-header_content)-1;
+        extracted_uri = (char*)malloc(MAX_PATH_LENGTH);
+        strncpy(extracted_uri, start+1, length);
+        extracted_uri[length] = '\0';
+        return extracted_uri;
     }
     return "/";
 }
@@ -394,7 +403,7 @@ void normalize_path(char* str) {
     }
 }
 
-void* safe_malloc(size_t size) {
+void *safe_malloc(size_t size) {
     void* ptr = malloc(size);
     if (ptr == NULL) {
         print("error", "Error allocating memory.");
@@ -496,7 +505,7 @@ void concatenate_string(char** str, const char* new_str) {
 }
 
 void handle_connection(connection_params *conn){
-    char *file_path = "/";
+    char *file_path = NULL;
     char buffer[BUFFER_SIZE] = {0};
 
     int8_t in_folder = FALSE; // Only serve files into specific folder
@@ -519,12 +528,13 @@ void handle_connection(connection_params *conn){
             print(NULL, "[%d] Connection closed by client.", conn->socket);
             break;
         } else if (read_bytes == -1) {
-            print("error", "[%d] Error reading from socket content.", conn->socket);
+            print("error", "[%d] Error reading content from client socket.", conn->socket);
             break;
         }
         
         // Extract URI from client recv header
         file_path = extract_URI_from_header(buffer);
+
         normalize_path(file_path);
         print(NULL, "Handling route: %s", file_path);
 
@@ -577,7 +587,7 @@ void handle_connection(connection_params *conn){
             }
 
             concatenate_string(&file_html_list, FILE_EXPLORER_FOOTER);
-            send_response(file_html_list, conn->socket);
+            send_response(conn->socket, file_html_list);
 
             free(file_html_list);
             for (int i = 0; i < file_amount; i++)
@@ -593,7 +603,7 @@ void handle_connection(connection_params *conn){
 
         // If file is not found send a 404
         if (file == NULL) {
-            print("error", "The file '%s' could not be opened.", file_path);
+            print("error", "The file '%s' could not be opened/found.", file_path);
             send_404_response(conn->socket);
             break;
 
@@ -609,22 +619,23 @@ void handle_connection(connection_params *conn){
                 sscanf(range_header, "Range: bytes="SIZE_T_FORMAT"-"SIZE_T_FORMAT"", &start_offset, &end_offset);
                 print(NULL, "Range detected: from "SIZE_T_FORMAT" to " SIZE_T_FORMAT, start_offset, end_offset);
                 send_206_http_response(
+                    conn->socket,
                     file, 
-                    conn->socket, 
                     get_filename_mimetype(file_path), 
                     file_size,
                     start_offset, 
                     end_offset);
             }else{ 
                 send_200_http_response(
-                    file,
                     conn->socket,
+                    file,
                     get_filename_mimetype(file_path),
                     file_size);
             }
             fclose(file);
         }
     }
+    free(file_path);
     close_socket(conn->socket);
 }
 
