@@ -6,9 +6,7 @@ Is a lightweight web server written in C using sockets. Compilable for Windows a
 
 ![](https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/HTTP_logo.svg/320px-HTTP_logo.svg.png)
 
-![](https://33333.cdn.cke-cs.com/kSW7V9NHUXugvhoQeFaf/images/4c71bc4915d69624d517457348bd0606d35ca8d95bdce915.png)
-
-![](https://33333.cdn.cke-cs.com/kSW7V9NHUXugvhoQeFaf/images/94337eed51622ef148d3bea1bd737bb964757bc59a8e612a.png)
+![](https://i.ibb.co/S3zgskw/img.png)
 
 ## Basic usage
 
