@@ -20,15 +20,21 @@
     #include <sys/time.h>
     #include <arpa/inet.h>
     #include <dirent.h>
-
+    #include <sys/stat.h>
+    #include <ctype.h>
     typedef int32_t SocketType;
+
     #define SIZE_T_FORMAT "%zu"
     #define SEND_D_FLAG MSG_NOSIGNAL // avoid SIGPIPE signal
 #else
+    
     #include <winsock2.h>
     #include <windows.h>
+    #include <locale.h>
+    #include <wchar.h>
 
     typedef SOCKET SocketType;
+
     #define SIZE_T_FORMAT "%Illu"
     #define SEND_D_FLAG 0
 #endif
@@ -76,8 +82,8 @@ size_t get_file_length(const char* filename);
 char *get_arg_value(int argc, char **argv, char *target_arg);
 char *extract_URI_from_header(char *header_content);
 void *safe_malloc(size_t size);
-char **get_list_file(const char* path, size_t *file_amount);
-void normalize_path(char* str);
+char **get_dir_content(const char* path, size_t *file_amount);
+void decode_url(char* url);
 void concatenate_string(char** str, const char* new_str);
 void set_shell_text_color(const char* color);
 void print_tinyc_welcome_logo();
@@ -97,6 +103,8 @@ void handle_connection(connection_params *params);
 MimeType mime_types[MAX_MIME_TYPES] = {
     { ".html", "text/html" },
     { ".htm", "text/html" },
+    { ".srt", "application/x-subrip" },
+    { ".vtt", "text/vtt" },
     { ".txt", "text/plain" },
     { ".css", "text/css" },
     { ".js", "application/javascript" },
@@ -120,7 +128,7 @@ const char *FILE_EXPLORER_HEADER = "HTTP/1.1\r\n"
 "Content-Type: text/html\r\n\r\n"
 "<!DOCTYPE html>"
 "<html>"
-"<head><title>TinyC</title></head>"
+"<head><title>TinyC</title><meta charset='UTF-8'></head>"
 "<body>"
 "<h1>Content into: %s</h1>"
 "(%d elements found)"

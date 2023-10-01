@@ -11,6 +11,9 @@ int main(int argc, char *argv[]) {
     int16_t max_threads = MAX_THREADS;
     int8_t show_explorer = TRUE;
 
+    #ifndef __linux__
+        setlocale(LC_ALL, "");
+    #endif
     // Socket vars declaration
     SocketType server_socket, client_socket;
     struct sockaddr_in address;
@@ -200,7 +203,7 @@ char *get_arg_value(int argc, char **argv, char *target_arg){
 
 inline void print_tinyc_welcome_logo(){
     set_shell_text_color("32");
-    print(NULL, "####  Welcome to tinyC!  ####");
+    print(NULL, "####  Welcome to tinyC! #### (%s)", __TIMESTAMP__);
     set_shell_text_color("0");
 }
 
@@ -230,7 +233,6 @@ void print(const char* type, const char* msg, ...) {
         vprintf(msg, args);
         printf("\n");
         va_end(args);
-        // free(full_date);
     }
 }
 
@@ -249,7 +251,7 @@ void send_206_http_response(SocketType  socket, FILE *file, const char *content_
     snprintf(header, MAX_HEADER_SIZE, "HTTP/1.1 206 Partial Content\r\n"
                     "Connection: keep-alive\r\n"
                     "Accept-Ranges: bytes\r\n"
-                    "Content-Type: %s\r\n"
+                    "Content-Type: %s; charset=utf-8\r\n"
                     "Content-Range: bytes " SIZE_T_FORMAT "-" SIZE_T_FORMAT "/" SIZE_T_FORMAT "\r\n"
                     "Content-Length: " SIZE_T_FORMAT "\r\n\r\n", content_type, start, end, file_size, end - start + 1);
     send_response(socket, header);
@@ -261,8 +263,9 @@ void send_200_http_response(SocketType  socket, FILE *file, const char *content_
     char header[MAX_HEADER_SIZE];
     snprintf(header, MAX_HEADER_SIZE, "HTTP/1.1 200 OK\r\n"
                     "Connection: keep-alive\r\n"
+                    "Access-Control-Allow-Origin: *\r\n"
                     "Accept-Ranges: bytes\r\n"
-                    "Content-Type: %s\r\n"
+                    "Content-Type: %s; charset=utf-8\r\n"
                     "Content-Length: " SIZE_T_FORMAT "\r\n\r\n", content_type, content_length);
     send_response(socket, header);
     send_file_in_chuncks(socket, file);
@@ -304,15 +307,20 @@ int starts_with(const char *str, const char *word) {
         return fileLength;
     }
 #else
-    size_t get_file_length(const char* filename) {
+    uint64_t get_file_length(const char* filename) {
         HANDLE hFile = CreateFile(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hFile == INVALID_HANDLE_VALUE) {
             print("error", "Error to open the file for get file size : %s", filename);
             return 0;
         }
-        size_t fileSize = GetFileSize(hFile, NULL);
+        LARGE_INTEGER fileSize;
+        if (!GetFileSizeEx(hFile, &fileSize)) {
+            CloseHandle(hFile);
+            print("error", "Error to get file size : %s", filename);
+            return 0;
+        }
         CloseHandle(hFile);
-        return fileSize;
+        return (uint64_t)fileSize.QuadPart;
     }
 #endif
 
@@ -392,14 +400,17 @@ char *extract_URI_from_header(char *header_content){
     return "/";
 }
 
-void normalize_path(char* str) {
-    // replace %20 for spaces.
-    char *p20 = "%20";
-    char* pos = strstr(str, p20);
-    while (pos != NULL) {
-        memmove(pos + 1, pos + 3, strlen(pos + 2));
-        *pos = ' ';
-        pos = strstr(pos + 1, p20);
+void decode_url(char* url) {
+    char *url_p = url;
+    int decoded_char;
+    while (*url_p) {
+        if (*url_p == '%' && isxdigit(*(url_p + 1)) && isxdigit(*(url_p + 2))) {
+            char hex[3] = {url_p[1], url_p[2], '\0'};
+            sscanf(hex, "%x", &decoded_char);
+            memmove(url_p + 1, url_p + 3, strlen(url_p + 2) + 1); 
+            *url_p = decoded_char;
+        }
+        url_p++;
     }
 }
 
@@ -412,74 +423,81 @@ void *safe_malloc(size_t size) {
     return ptr;
 }
 
-char **get_list_file(const char* path, size_t *file_amount) {
+char **get_dir_content(const char* path, size_t *file_amount) {
   char **dir_content = (char**)safe_malloc(EXPLORER_MAX_FILES * sizeof(char*) + 1);
   char entry_name[EXPLORER_MAX_FILENAME_LENGTH];
   int file_n = 0;
   #ifdef __linux__
-        DIR *dir;
-        struct dirent *entry;
-        dir = opendir(path);
+    DIR *dir;
+    struct dirent *entry;
+    dir = opendir(path);
+    struct stat file_stat;
+    if(dir == NULL){
+        print("error", "linux: not possible get directory content %s", path);
+        return NULL;
+    }
 
-        if(dir == NULL){
-            print("error", "linux: not possible get directory content %s", path);
-            return NULL;
+    while ((entry= readdir(dir)) != NULL){
+        if(strlen(entry->d_name) > EXPLORER_MAX_FILENAME_LENGTH){
+            print("error", "File name too long.");
+            continue;
+        }
+        if(file_n >= EXPLORER_MAX_FILES){
+            print("info", "Maximum of showed files exceded.");
+            break;
         }
 
-        while ((entry= readdir(dir)) != NULL){
-            if(strlen(entry->d_name) > EXPLORER_MAX_FILENAME_LENGTH){
-                print("error", "File name too long.");
-                continue;
-            }
-            if(file_n >= EXPLORER_MAX_FILES){
-                print("info", "Maximum of showed files exceded.");
-                break;
-            }
-            if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
-                continue;
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+        
+        snprintf(entry_name, sizeof(entry_name), "%s/%s", path, entry->d_name);
 
-            if(entry->d_type == DT_DIR)
+        if (stat(entry_name, &file_stat) == 0) {
+            if (S_ISDIR(file_stat.st_mode))
                 sprintf(entry_name, "%s/", entry->d_name);
             else
                 sprintf(entry_name, "%s", entry->d_name);
-
-            dir_content[file_n] = (char*)safe_malloc(strlen(entry_name) + 1);
-            strcpy(dir_content[file_n], entry_name);
-            file_n++;
         }
-        closedir(dir);
+
+        dir_content[file_n] = (char*)safe_malloc(strlen(entry_name) + 1);
+        strcpy(dir_content[file_n], entry_name);
+
+        file_n++;
+    }
+    closedir(dir);
   #else
-        WIN32_FIND_DATA find_data;
-        HANDLE h_find;
-        h_find = FindFirstFile(path, &find_data);
+    WIN32_FIND_DATA find_data;
+    HANDLE h_find;
+    h_find = FindFirstFile(path, &find_data);
 
-        if (h_find == INVALID_HANDLE_VALUE){
-            print("error", "windows: not possible get directory content %s", path);
-            return NULL;
+    if (h_find == INVALID_HANDLE_VALUE){
+        print("error", "windows: not possible get directory content %s", path);
+        return NULL;
+    }
+
+    while(FindNextFile(h_find, &find_data)){
+        if(file_n >= EXPLORER_MAX_FILES){
+            print("info", "Maximum of files exceded.");
+            break; 
         }
 
-        while(FindNextFile(h_find, &find_data)){
-                if(file_n >= EXPLORER_MAX_FILES){
-                    print("info", "Maximum of files exceded.");
-                    break; 
-                }
-                if(strlen(find_data.cFileName) > EXPLORER_MAX_FILENAME_LENGTH){
-                    print("error", "File name too long.");
-                    continue;
-                }
-                if (!strcmp(find_data.cFileName, ".") || !strcmp(find_data.cFileName, ".."))
-                    continue;
-
-                if(find_data.dwFileAttributes == FILE_ATTRIBUTE_DIRECTORY)
-                    sprintf(entry_name, "%s/", find_data.cFileName);
-                else
-                    sprintf(entry_name, "%s", find_data.cFileName);
-
-                dir_content[file_n] = (char*)safe_malloc(strlen(entry_name) + 1);
-                strcpy(dir_content[file_n], entry_name);
-                file_n++;
+        if(strlen(find_data.cFileName) > EXPLORER_MAX_FILENAME_LENGTH){
+            print("error", "File name too long.");
+            continue;
         }
-      FindClose(h_find);
+        if (!strcmp(find_data.cFileName, ".") || !strcmp(find_data.cFileName, ".."))
+            continue;
+
+        if(find_data.dwFileAttributes == FILE_ATTRIBUTE_DIRECTORY)
+            sprintf(entry_name, "%s/", find_data.cFileName);
+        else
+            sprintf(entry_name, "%s", find_data.cFileName);
+
+        dir_content[file_n] = (char*)safe_malloc(strlen(entry_name) + 1);
+        strcpy(dir_content[file_n], entry_name);
+        file_n++;
+    }
+  FindClose(h_find);
 #endif
   *file_amount = file_n;
   dir_content[file_n+1] = NULL;
@@ -535,7 +553,7 @@ void handle_connection(connection_params *conn){
         // Extract URI from client recv header
         file_path = extract_URI_from_header(buffer);
 
-        normalize_path(file_path);
+        decode_url(file_path);
         print(NULL, "Handling route: %s", file_path);
 
         // Check if uri path == '/' and redirect to default route
@@ -569,7 +587,7 @@ void handle_connection(connection_params *conn){
 
             size_t file_amount;
             print(NULL, "[%d] Explorer opened for '%s'", conn->socket, buffer);
-            char **dir_content = get_list_file(buffer, &file_amount);
+            char **dir_content = get_dir_content(buffer, &file_amount);
             char *file_html_list = NULL;
 
             sprintf(buffer, FILE_EXPLORER_HEADER, file_path, file_amount);

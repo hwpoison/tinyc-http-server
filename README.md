@@ -62,4 +62,4 @@ make monothread
 
 <table><tbody><tr><td>Windows</td><td>GCC</td><td>gcc (x86_64-posix-seh-rev1, Built by MinGW-Builds project) 13.1.0</td></tr><tr><td>Linux</td><td>GCC</td><td>gcc (Ubuntu 9.4.0-1ubuntu1~20.04.1) 9.4.0</td></tr></tbody></table>
 
-**TODO: add utf-8 support**
+**TODO: add utf-8 support for Windows**

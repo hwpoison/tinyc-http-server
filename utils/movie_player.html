@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Play a movie</title>
+</head>
+<body>
+    <h1>Play a movie</h1>
+    <video id="video" controls width="640" height="360">
+    </video>
+    <input type="text" id="videoURL" placeholder="Video URL">
+    <input type="text" id="subtitleURL" placeholder="Subtitle URL">
+    <button onclick="cargarVideoYSubtitulo()">Load</button>
+    <script>
+        function cargarVideoYSubtitulo() {
+            const videoURL = document.getElementById('videoURL').value;
+            const subtitleURL = document.getElementById('subtitleURL').value;
+            const video = document.getElementById('video');
+            
+            video.src = videoURL;
+
+            const trackElement = document.createElement('track');
+            trackElement.kind = 'subtitles';
+            trackElement.src = subtitleURL;
+            video.appendChild(trackElement);
+            video.load();
+        }
+    </script>
+</body>
+</html>
+<style>
+#video{
+    width:100%;
+}
+</style>
