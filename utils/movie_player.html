@@ -6,13 +6,27 @@
     <title>Play a movie</title>
 </head>
 <body>
-    <h1>Play a movie</h1>
-    <video id="video" controls width="640" height="360">
-    </video>
+    <h1 id="title" style="font-family:Arial">Play a movie</h1>
+    <video id="video" controls width="100%" height="360"></video>
+    <br>
     <input type="text" id="videoURL" placeholder="Video URL">
     <input type="text" id="subtitleURL" placeholder="Subtitle URL">
     <button onclick="cargarVideoYSubtitulo()">Load</button>
+    <button id="lightSwitch" onclick="switchLights()"/>
     <script>
+        var lights = true;
+
+        function switchLights(){
+            const button = document.getElementById("lightSwitch")
+            console.log(button)
+            button.textContent = lights ? "Turn off lights 🌃": "Turn on lights 💡"
+            document.body.style.background = lights? "white":"black"
+            document.getElementById("title").style.color = lights? "black":"white"
+            lights=!lights;
+
+        }
+
+        switchLights();
         function cargarVideoYSubtitulo() {
             const videoURL = document.getElementById('videoURL').value;
             const subtitleURL = document.getElementById('subtitleURL').value;
