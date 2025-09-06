@@ -4,7 +4,8 @@ int main(int argc, char *argv[]) {
     char *input_arg = NULL;
     char *folder_to_serve = NULL, *default_route = NULL;
     char server_ip[] = "0.0.0.0";
-    char client_ip[8] = ":";
+    //char client_ip[8] = ":";
+    char client_ip[INET_ADDRSTRLEN] = ":";
 
     int16_t port = DEFAULT_PORT;
     int16_t backlog = SERVER_BACKLOG;
@@ -389,15 +390,29 @@ char *extract_URI_from_header(char *header_content){
     char *extracted_uri;
     char *start, *end;
     int length;
-    if((start = strchr(header_content, ' ')) != NULL &&
-        (end = strchr(start+1, ' '))!=NULL){
-        length = (end-header_content)-(start-header_content)-1;
-        extracted_uri = (char*)malloc(MAX_PATH_LENGTH);
-        strncpy(extracted_uri, start+1, length);
+
+    if ((start = strchr(header_content, ' ')) != NULL &&
+        (end = strchr(start + 1, ' ')) != NULL) {
+
+        length = (end - start - 1);
+
+        if (length <= 0 || length >= MAX_PATH_LENGTH) {
+            print("error", "URI too long or invalid.");
+            return strdup("/");
+        }
+
+        extracted_uri = (char*)malloc(length + 1);
+        if (!extracted_uri) {
+            print("error", "malloc() failed for URI.");
+            return strdup("/");
+        }
+
+        strncpy(extracted_uri, start + 1, length);
         extracted_uri[length] = '\0';
         return extracted_uri;
     }
-    return "/";
+
+    return strdup("/");
 }
 
 void decode_url(char* url) {
@@ -572,13 +587,14 @@ void handle_connection(connection_params *conn){
         /* =====================================  */
         /* =======      File explorer      =====  */
         /* =====================================  */
-        if(conn->show_explorer == TRUE &&
-        (file_path[strlen(file_path)-1] == '/' || strcmp(file_path, "") == 0)) {
-            // If folder to serve is specified and path did not match, send a 404
-            if(conn->folder_to_serve!=NULL && !in_folder){
-                send_404_response(conn->socket);
-                break;
-            }
+        size_t path_len = strlen(file_path);
+		if(conn->show_explorer == TRUE &&
+			(path_len > 0 && file_path[path_len - 1] == '/') || strcmp(file_path, "") == 0){
+				// If folder to serve is specified and path did not match, send a 404
+				if(conn->folder_to_serve!=NULL && !in_folder){
+					send_404_response(conn->socket);
+					break;
+				}
             #ifdef __linux__
                 sprintf(buffer, "./%s", file_path);
             #else
