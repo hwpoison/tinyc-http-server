@@ -3,9 +3,12 @@
 int main(int argc, char *argv[]) {
     char *input_arg = NULL;
     char *folder_to_serve = NULL, *default_route = NULL;
-    char server_ip[] = "0.0.0.0";
-    //char client_ip[8] = ":";
-    char client_ip[INET_ADDRSTRLEN] = ":";
+    char server_ip[255] = "0.0.0.0";
+    #ifndef __linux__
+        char client_ip[8] = ":";
+    #else
+        char client_ip[INET_ADDRSTRLEN] = ":";
+    #endif
 
     int16_t port = DEFAULT_PORT;
     int16_t backlog = SERVER_BACKLOG;
@@ -34,13 +37,13 @@ int main(int argc, char *argv[]) {
             "\nBasic usage: %s --port 8081 --folder /my_web\n"
             " example: %s --port 3543 --folder simple_web/index.html\n"
             "\nOptions:\n"
-            "\t--folder <folder_path>: Folder to serve. By default serve all executable location dir content.\n"
+            "\t--folder <folder_path>: Folder to serve. By default is a relative path due to executable location.\n"
             "\t--ip: Set server IP. Default: ANY (Local/Network).\n"
             "\t--port <port_number>: Port number. Default is %d\n"
             "\t--backlog <number>: Max server listener.\n"
             "\t--max-threads <number>: Max server threads.\n"
             "\t--default-redirect <file_path>/: redirect / to default file route. ex: simple_web/index.html\n"
-            "\t--no-print : No print log (less mem consumption).\n"
+            "\t--no-logs : No print log (Less I/O bound due to stdout and less memory consumption)).\n"
             "\t--no-file-explorer: Disable file explorer.\n"
             ,argv[0], argv[0], DEFAULT_PORT);
         return 0;
@@ -59,8 +62,8 @@ int main(int argc, char *argv[]) {
     if((input_arg = get_arg_value(argc, argv, "--ip")) != NULL)
         strcpy(server_ip, input_arg);
 
-    if((get_arg_value(argc, argv, "--no-print")) != NULL)
-        print_output = 0;
+    if((get_arg_value(argc, argv, "--no-logs")) != NULL)
+        no_logs = TRUE;
 
     if(get_arg_value(argc, argv, "--no-file-explorer") != NULL)
         show_explorer = FALSE;
@@ -70,23 +73,20 @@ int main(int argc, char *argv[]) {
 
     default_route = get_arg_value(argc, argv, "--default-redirect");
 
-    print_tinyc_welcome_logo();
-
     set_shell_text_color("36"); // lightblue
-    print(NULL, "Max threads: %d", max_threads);
-    print(NULL, "Backlog: %d", backlog);
+    write_log(NULL, "Max threads: %d", max_threads);
+    write_log(NULL, "Backlog: %d", backlog);
 
     #ifdef MULTITHREAD_ON
-        pthread_t *active_threads = safe_malloc(sizeof(active_threads)*max_threads);
+        pthread_t *all_threads = safe_malloc(sizeof(pthread_t)*max_threads);
         int16_t thread_count = 0;
-        print(NULL, "Multithreading enabled.");
+        write_log(NULL, "Multithreading enabled.");
     #endif
 
     /* =============================================================  */
     /* ======= Server scket initialization and configuration =======  */
     /* =============================================================  */
-
-    print(NULL, "Initializing server socket.");
+    write_log(NULL, "Initializing server socket.");
     // Winsock init
     #ifdef _WIN32
         if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
@@ -114,8 +114,8 @@ int main(int argc, char *argv[]) {
 
     // Bind addr and port
     if (bind(server_socket, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        print(NULL, "[x] Error binding the socket to address and port %d.", port);
-        perror("Caused by ");
+        write_log(NULL, "[x] Error binding the socket to address and port %s:%d.", server_ip, port);
+        socket_error_msg();
         exit(EXIT_FAILURE);
     }
 
@@ -124,22 +124,33 @@ int main(int argc, char *argv[]) {
         perror("Error to listen connections.");
         exit(EXIT_FAILURE);
     }
-    print(NULL, "> Running server at: %s:%d", server_ip, port);
+    if(!no_logs){
+        set_shell_text_color("32");
+        printf("####  Welcome to tinyC! #### (%s)\n", __TIMESTAMP__);
+        printf("#### Running at %s:%d\n", server_ip, port);
+        set_shell_text_color("0");
+    }
+
+    write_log(NULL, "==> Tinyc server started");
+    write_log(NULL, "> Running server at: %s:%d", server_ip, port);
     set_shell_text_color("0");
 
     /* =====================================  */
     /* ======= Accept connections loop =====  */
     /* =====================================  */
+    // At this point, the server is running and waiting for upcoming connections
     for(;;) {
         #ifdef MULTITHREAD_ON
-            // Check threads limits
-            if(thread_count>=max_threads){
-                print("error", "Server too busy...\n");
-                for(int i = 0; i < max_threads; i++){
-                    pthread_join(active_threads[i], NULL);
+            // Check threads limits, if reach the max, waits until all are finished before 
+            // open new one.
+            if(thread_count >= max_threads){
+                write_log("error", "Server too busy...\n");
+                for(int i = 0; i < max_threads - 1; i++){
+                    pthread_join(all_threads[i], NULL);
+                    all_threads[i] = 0;
                 }
                 thread_count = 0;
-                print("info", "All threads free up.\n");
+                write_log("info", "All threads free up.\n");
             }
         #endif
 
@@ -149,8 +160,8 @@ int main(int argc, char *argv[]) {
         #else
             if ((client_socket = accept(server_socket, (struct sockaddr *)&address, &addrlen)) == INVALID_SOCKET) {
         #endif
-                print("error", "Error accepting the connection");
-                continue;
+            write_log("error", "Error accepting the connection");
+            continue;
         }
 
         // Get client ip address
@@ -168,21 +179,26 @@ int main(int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         }
 
-        // Create new thread for handle connection
-        print("info", "[%d] Incoming connection from %s",client_socket, client_ip);
+        // Prepare to handle the incoming connection
+        write_log("info", "[%d] Incoming connection from %s", client_socket, client_ip);
 
-        connection_params *params = safe_malloc(sizeof(connection_params));
-        params->socket = client_socket;
-        params->default_route = default_route;
-        params->folder_to_serve = folder_to_serve;
-        params->show_explorer = show_explorer;
+        connection_params *client_conn = safe_malloc(sizeof(connection_params));
+        client_conn->socket = client_socket;
+        client_conn->default_route = default_route;
+        client_conn->folder_to_serve = folder_to_serve;
+        client_conn->show_explorer = show_explorer;
 
         #ifdef MULTITHREAD_ON
-            pthread_create(&active_threads[thread_count], NULL, handle_connection_thread, (void*)params);
-            pthread_detach(active_threads[thread_count]);
+            // handle the new connection in a thread apart
+            int new_thread = pthread_create(&all_threads[thread_count], NULL, handle_connection_thread, (void*)client_conn);
+            if(new_thread != 0){
+                write_log("error", "pthread_create failed: '%s'", strerror(new_thread));
+            }
+            pthread_detach(all_threads[thread_count]);
             thread_count++;
         #else
-            handle_connection(params);
+            // handle the connection in a single thread
+            handle_connection(client_conn);
         #endif
     }   
 
@@ -191,6 +207,8 @@ int main(int argc, char *argv[]) {
     #ifdef _WIN32
         WSACleanup();
     #endif
+
+    atexit(close_log_file);
     return 0;
 }
 
@@ -202,47 +220,71 @@ char *get_arg_value(int argc, char **argv, char *target_arg){
     return NULL;
 }
 
-inline void print_tinyc_welcome_logo(){
-    set_shell_text_color("32");
-    print(NULL, "####  Welcome to tinyC! #### (%s)", __TIMESTAMP__);
-    set_shell_text_color("0");
-}
-
 void set_shell_text_color(const char* color) {
     printf("\033[%sm", color);
 }
 
-void print(const char* type, const char* msg, ...) {
-    if (print_output == TRUE) {
+void init_log_file() {
+    log_file = fopen(LOG_FILE_NAME, "a");
+    if (!log_file) {
+        perror("Can't create log file.");
+        exit(1);
+    }
+}
+
+void close_log_file() {
+    if (log_file) {
+        fclose(log_file);
+        log_file = NULL;
+    }
+}
+
+void write_log(const char* type, const char* msg, ...) {
+    if(!no_logs){
+        if(log_file==NULL)
+            init_log_file();
+    
         va_list args;
         char* full_date = get_current_datetime();
+        if (!log_file) return;
+
         va_start(args, msg);
         if (type != NULL) {
             if(!strcmp(type, "error")){
-                set_shell_text_color("31");
-                printf("[ERROR][%s] ", full_date);
+                fprintf(log_file, "[ERROR][%s] ", full_date);
             }
             if(!strcmp(type, "info")){
-                set_shell_text_color("35"); // purple
-                printf("[INFO][%s] ", full_date);
+                fprintf(log_file, "[INFO][%s] ", full_date);
             }
-            set_shell_text_color("0");
+            if(!strcmp(type, "debug")){
+                printf("[DEBUG][%s]", full_date);
+                vprintf(msg, args);
+                printf("\n");
+                fprintf(log_file, "[DEBUG][%s]", full_date);
+            }
         } else {
-            printf("[%s] ", full_date);
+            fprintf(log_file, "[%s] ", full_date);
         }
 
-        vprintf(msg, args);
-        printf("\n");
+        vfprintf(log_file, msg, args);
+        fprintf(log_file, "\n");
         va_end(args);
     }
 }
 
-void send_206_http_response(SocketType  socket, FILE *file, const char *content_type, size_t file_size, size_t start, size_t end) {
+void send_response(SocketType to_socket, const char *response_content) {
+    write_log(NULL, "Sending %d bytes.", strlen(response_content));
+    if(send(to_socket, response_content, strlen(response_content), 0) < 0){
+        write_log(NULL, "Error to sending.\n");
+    }
+}
+
+void send_partial_content(SocketType  socket, FILE *file, const char *content_type, size_t file_size, size_t start, size_t end) {
     // Seek the file to the specified rangue before send
     fseek(file, start, SEEK_SET);
     // Check if the requested range is within the file size
     if (start > file_size || end > file_size) {
-        print("error", "[!] Error: requested range is out of bounds.");
+        write_log("error", "[!] Error: requested range is out of bounds.");
         send_500_response(socket);
         return;
     }
@@ -251,43 +293,56 @@ void send_206_http_response(SocketType  socket, FILE *file, const char *content_
     char header[MAX_HEADER_SIZE];
     snprintf(header, MAX_HEADER_SIZE, "HTTP/1.1 206 Partial Content\r\n"
                     "Connection: keep-alive\r\n"
+                    "Keep-Alive: timeout=5\r\n"
                     "Accept-Ranges: bytes\r\n"
                     "Content-Type: %s; charset=utf-8\r\n"
                     "Content-Range: bytes " SIZE_T_FORMAT "-" SIZE_T_FORMAT "/" SIZE_T_FORMAT "\r\n"
                     "Content-Length: " SIZE_T_FORMAT "\r\n\r\n", content_type, start, end, file_size, end - start + 1);
     send_response(socket, header);
-    send_file_in_chuncks(socket, file);
-    print("info", "Response 206 done.");
+    send_file_content(socket, file); // then send the file fragment
+    write_log("info", "Response 206 done.");
 }
 
-void send_200_http_response(SocketType  socket, FILE *file, const char *content_type, size_t content_length) {
+void send_content(SocketType socket, FILE *file, const char *content_type, size_t content_length) {
     char header[MAX_HEADER_SIZE];
     snprintf(header, MAX_HEADER_SIZE, "HTTP/1.1 200 OK\r\n"
                     "Connection: keep-alive\r\n"
+                    "Keep-Alive: timeout=5\r\n"
                     "Access-Control-Allow-Origin: *\r\n"
                     "Accept-Ranges: bytes\r\n"
                     "Content-Type: %s; charset=utf-8\r\n"
                     "Content-Length: " SIZE_T_FORMAT "\r\n\r\n", content_type, content_length);
     send_response(socket, header);
-    send_file_in_chuncks(socket, file);
-    print("info", "Response 200 Done.");
+    send_file_content(socket, file); // then the file content
+    write_log("info", "Response 200 Done.");
 }
 
 void send_302_response(SocketType  socket, char *uri) {
     char buffer[BUFFER_SIZE];
     snprintf(buffer, MAX_HEADER_SIZE, HTTP_302_REDIRECTION, uri);
     send_response(socket, buffer);
-    print("info", "302 redirection to %s", uri);
+    write_log("info", "302 redirection to %s", uri);
 }
 
 void send_404_response(SocketType  socket) {
     send_response(socket, HTTP_404_NOT_FOUND);
-    print("info", "404 not found.");
+    write_log("info", "404 not found.");
+}
+
+void send_200_response(SocketType  socket) {
+    send_response(socket, HTTP_200_OK);
+    write_log("info", "OK");
+}
+
+
+void send_414_response(SocketType socket){
+    send_response(socket, HTTP_414_URL_TOO_LONG);
+    write_log("info", "404 not found.");
 }
 
 void send_500_response(SocketType  socket) {
     send_response(socket, HTTP_500_INTERNAL_ERROR);
-    print("error", "500 server side error.");
+    write_log("error", "500 server side error.");
 }
 
 int starts_with(const char *str, const char *word) {
@@ -299,7 +354,7 @@ int starts_with(const char *str, const char *word) {
     size_t get_file_length(const char* filename){
         FILE *file = fopen(filename, "rb");
         if (file == NULL) {
-            print("error", "Error to open the file for get file size : %s", filename);
+            write_log("error", "Error to open the file for get file size : %s", filename);
             return 0;
         }
         fseek(file, 0, SEEK_END);
@@ -311,13 +366,13 @@ int starts_with(const char *str, const char *word) {
     uint64_t get_file_length(const char* filename) {
         HANDLE hFile = CreateFile(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hFile == INVALID_HANDLE_VALUE) {
-            print("error", "Error to open the file for get file size : %s", filename);
+            write_log("error", "Error to open the file for get file size : %s", filename);
             return 0;
         }
         LARGE_INTEGER fileSize;
         if (!GetFileSizeEx(hFile, &fileSize)) {
             CloseHandle(hFile);
-            print("error", "Error to get file size : %s", filename);
+            write_log("error", "Error to get file size : %s", filename);
             return 0;
         }
         CloseHandle(hFile);
@@ -325,14 +380,16 @@ int starts_with(const char *str, const char *word) {
     }
 #endif
 
-void send_response(SocketType to_socket, const char *response_content) {
-    print(NULL, "Sending %d bytes.", strlen(response_content));
-    if(send(to_socket, response_content, strlen(response_content), 0) < 0){
-        print(NULL, "Error to sending.\n");
-    }
+char *cstrdup(char *string){
+   size_t string_len = strlen(string) + 1;
+   char *dup = malloc(string_len);
+   if(dup != NULL){
+        memcpy(dup, string, string_len);
+   } 
+   return dup;
 }
 
-void send_file_in_chuncks(SocketType to_socket, FILE *file){
+void send_file_content(SocketType to_socket, FILE *file){
     char buffer[BUFFER_SIZE] = {0};
     size_t bytesRead;
     while ((bytesRead = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
@@ -383,37 +440,34 @@ void close_socket(SocketType socket) {
     #else 
         closesocket(socket);
     #endif
-    print("info", "[%d] Socket closed.", socket);
+    write_log("info", "[%d] Socket closed.", socket);
 }
 
-char *extract_URI_from_header(char *header_content){
-    char *extracted_uri;
+
+int extract_URI_from_header(char *header_content, char *output_buffer, size_t buffer_size) {
     char *start, *end;
     int length;
-
+    
+    // Initialize output buffer with default value
+    strncpy(output_buffer, "/", buffer_size - 1);
+    output_buffer[buffer_size - 1] = '\0';
+    
     if ((start = strchr(header_content, ' ')) != NULL &&
         (end = strchr(start + 1, ' ')) != NULL) {
-
+        
         length = (end - start - 1);
-
-        if (length <= 0 || length >= MAX_PATH_LENGTH) {
-            print("error", "URI too long or invalid.");
-            return strdup("/");
+        
+        if (length <= 0 || length >= MAX_PATH_LENGTH || length >= (int)buffer_size) {
+            write_log("error", "URI too long or invalid.");
+            return 1; // output_buffer already contains "/"
         }
-
-        extracted_uri = (char*)malloc(length + 1);
-        if (!extracted_uri) {
-            print("error", "malloc() failed for URI.");
-            return strdup("/");
-        }
-
-        strncpy(extracted_uri, start + 1, length);
-        extracted_uri[length] = '\0';
-        return extracted_uri;
+        
+        strncpy(output_buffer, start + 1, length);
+        output_buffer[length] = '\0';
+        return 0;
     }
-
-    return strdup("/");
 }
+
 
 void decode_url(char* url) {
     char *url_p = url;
@@ -432,40 +486,45 @@ void decode_url(char* url) {
 void *safe_malloc(size_t size) {
     void* ptr = malloc(size);
     if (ptr == NULL) {
-        print("error", "Error allocating memory.");
+        write_log("error", "Error allocating memory.");
         exit(-1);
     }
     return ptr;
 }
 
+/* Returns a list with all files entries from path and write the file count un file_mount */
 char **get_dir_content(const char* path, size_t *file_amount) {
   char **dir_content = (char**)safe_malloc(EXPLORER_MAX_FILES * sizeof(char*) + 1);
-  char entry_name[EXPLORER_MAX_FILENAME_LENGTH];
+  char entry_name[EXPLORER_MAX_FILENAME_LENGTH + 2 ];
   int file_n = 0;
+
   #ifdef __linux__
     DIR *dir;
     struct dirent *entry;
     dir = opendir(path);
     struct stat file_stat;
     if(dir == NULL){
-        print("error", "linux: not possible get directory content %s", path);
+        write_log("error", "linux: not possible get directory content %s", path);
+        free(dir_content);
         return NULL;
     }
 
+    // compose the current dir list
     while ((entry= readdir(dir)) != NULL){
         if(strlen(entry->d_name) > EXPLORER_MAX_FILENAME_LENGTH){
-            print("error", "File name too long.");
+            write_log("error", "File name too long.");
             continue;
         }
+
         if(file_n >= EXPLORER_MAX_FILES){
-            print("info", "Maximum of showed files exceded.");
+            write_log("info", "Maximum of showed files exceded.");
             break;
         }
 
         if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
             continue;
         
-        snprintf(entry_name, sizeof(entry_name), "%s/%s", path, entry->d_name);
+        snprintf(entry_name, sizeof(entry_name) , "%s/%s", path, entry->d_name);
 
         if (stat(entry_name, &file_stat) == 0) {
             if (S_ISDIR(file_stat.st_mode))
@@ -480,24 +539,26 @@ char **get_dir_content(const char* path, size_t *file_amount) {
         file_n++;
     }
     closedir(dir);
+
   #else
     WIN32_FIND_DATA find_data;
     HANDLE h_find;
     h_find = FindFirstFile(path, &find_data);
 
     if (h_find == INVALID_HANDLE_VALUE){
-        print("error", "windows: not possible get directory content %s", path);
+        write_log("error", "windows: not possible get directory content %s", path);
+        free(dir_content);
         return NULL;
     }
 
     while(FindNextFile(h_find, &find_data)){
         if(file_n >= EXPLORER_MAX_FILES){
-            print("info", "Maximum of files exceded.");
+            write_log("info", "Maximum of files exceded.");
             break; 
         }
 
         if(strlen(find_data.cFileName) > EXPLORER_MAX_FILENAME_LENGTH){
-            print("error", "File name too long.");
+            write_log("error", "File name too long.");
             continue;
         }
         if (!strcmp(find_data.cFileName, ".") || !strcmp(find_data.cFileName, ".."))
@@ -520,37 +581,52 @@ char **get_dir_content(const char* path, size_t *file_amount) {
   return dir_content;
 }
 
-void concatenate_string(char** str, const char* new_str) {
-    if (*str == NULL) {
-        *str = (char*)safe_malloc(strlen(new_str) + 1);
-        strcpy(*str, new_str);
-    } else {
-        size_t currentLength = strlen(*str);
-        size_t newLength = strlen(new_str);
-        char* temp = (char*)realloc(*str, currentLength + newLength + 1);
-        if (temp == NULL) {
-            print("error", "Error reallocating memory");
-            exit(EXIT_FAILURE);
+void concat_str(char **main_str, const char *to_add) {
+    size_t len_add = strlen(to_add);
+
+    if (*main_str == NULL) {
+        size_t initial_size = len_add + 1 + HTML_EL_SIZE;
+        *main_str = malloc(initial_size);
+        if (!*main_str) {
+            return;
         }
-        *str = temp;
-        strcat(*str, new_str);
+        (*main_str)[0] = '\0';
+    } else {
+        size_t len_base = strlen(*main_str);
+        size_t needed   = len_base + len_add + 1;
+
+        char *temp = realloc(*main_str, needed + HTML_EL_SIZE);
+        if (!temp) {
+            return;
+        }
+        *main_str = temp;
     }
+
+    strcat(*main_str, to_add);
+}
+
+
+void socket_error_msg(){
+    #ifdef __linux__
+        // todo
+        perror("Error caused by:");
+    #else
+        int errCode = WSAGetLastError();
+        write_log("error", "Socket error code %d", errCode);
+    #endif
 }
 
 void handle_connection(connection_params *conn){
-    char *file_path = NULL;
+    char file_path[MAX_PATH_LENGTH] = {0};
     char buffer[BUFFER_SIZE] = {0};
-
     int8_t in_folder = FALSE; // Only serve files into specific folder
     size_t read_bytes, file_size, start_offset, end_offset;
 
     /* ====================================== */
     /* =Read-Send loop between client-server= */
     /* ====================================== */
-    
-     for(;;){
-        print(NULL, "[%d] Reading from client...", conn->socket);
-
+    // At this point, a connection with a client is established and the socket is ready to receive and send requests.
+    for(;;){
         #ifdef __linux__
             read_bytes = read(conn->socket, buffer, BUFFER_SIZE);
         #else
@@ -558,26 +634,37 @@ void handle_connection(connection_params *conn){
         #endif
 
         if (read_bytes == 0) {
-            print(NULL, "[%d] Connection closed by client.", conn->socket);
+            write_log(NULL, "[%d] Connection closed by client.", conn->socket);
             break;
         } else if (read_bytes == -1) {
-            print("error", "[%d] Error reading content from client socket.", conn->socket);
+            socket_error_msg();
+            write_log("error", "[%d] Error reading content from client socket.", conn->socket);
             break;
         }
-        
-        // Extract URI from client recv header
-        file_path = extract_URI_from_header(buffer);
+
+        // Read and extract URI from the recv request
+        if(extract_URI_from_header(buffer, file_path, sizeof(file_path))){
+            send_414_response(conn->socket);
+            break;
+        }
 
         decode_url(file_path);
-        print(NULL, "Handling route: %s", file_path);
+
+        if(strcmp(file_path, "/test")==0){
+            send_200_response(conn->socket);
+            break;
+        }
+
+        write_log(NULL, "Handling route: %s", file_path);
 
         // Check if uri path == '/' and redirect to default route
         if(strcmp(file_path, "/") == 0 && conn->default_route != NULL){
-                print("info", "Redirecting to %s", conn->default_route);
-                send_302_response(conn->socket, conn->default_route);
+            write_log("info", "Redirecting to %s", conn->default_route);
+            send_302_response(conn->socket, conn->default_route);
         }
         
         remove_slash_from_start(file_path);
+
         // Check if the path match with default folder
         if(conn->folder_to_serve != NULL){
             remove_slash_from_start(conn->folder_to_serve); 
@@ -588,71 +675,86 @@ void handle_connection(connection_params *conn){
         /* =======      File explorer      =====  */
         /* =====================================  */
         size_t path_len = strlen(file_path);
+        char current_path[EXPLORER_MAX_FILENAME_LENGTH] = {0};
+
 		if(conn->show_explorer == TRUE &&
-			(path_len > 0 && file_path[path_len - 1] == '/') || strcmp(file_path, "") == 0){
+			((path_len > 0 && file_path[path_len - 1] == '/') || strcmp(file_path, "") == 0)){
 				// If folder to serve is specified and path did not match, send a 404
 				if(conn->folder_to_serve!=NULL && !in_folder){
 					send_404_response(conn->socket);
 					break;
 				}
+
+            // get current path
             #ifdef __linux__
-                sprintf(buffer, "./%s", file_path);
+                sprintf(current_path, "./%s", file_path);
             #else
-                sprintf(buffer, "./%s/*", file_path);
+                sprintf(current_path, "./%s/*", file_path);
             #endif
 
+            // get dir content
             size_t file_amount;
-            print(NULL, "[%d] Explorer opened for '%s'", conn->socket, buffer);
-            char **dir_content = get_dir_content(buffer, &file_amount);
+            write_log(NULL, "[%d] Explorer opened for '%s'", conn->socket, current_path);
+            char **dir_content = get_dir_content(current_path, &file_amount);
+            if(dir_content==NULL){
+               write_log("error", "Error getting dir content");
+               send_500_response(conn->socket);
+               break;
+            }
+
+            ///////// Create the html view /////////
             char *file_html_list = NULL;
+            char list_element[EXPLORER_MAX_FILENAME_LENGTH];
+            // Explorer header
+            sprintf(list_element, FILE_EXPLORER_HEADER, file_path, file_amount);
+            concat_str(&file_html_list, list_element);
 
-            sprintf(buffer, FILE_EXPLORER_HEADER, file_path, file_amount);
-            concatenate_string(&file_html_list, buffer);
-
-            sprintf(buffer, "<a href='%s'>%s</a><br>", "..", "..");
-            concatenate_string(&file_html_list, buffer);
+            // Special entries
+            sprintf(list_element, FILE_EXPLORER_LIST_ELEMENT, "..", "..");
+            concat_str(&file_html_list, list_element);
 
             // List all files
-            char list_element[EXPLORER_MAX_FILENAME_LENGTH];
             for(int x=0; x < file_amount; x++){
                 sprintf(list_element, FILE_EXPLORER_LIST_ELEMENT, dir_content[x], dir_content[x]);
                 list_element[strlen(list_element)] = '\0';
-                concatenate_string(&file_html_list, list_element);
+                concat_str(&file_html_list, list_element);
             }
+            // The footer
+            concat_str(&file_html_list, FILE_EXPLORER_FOOTER);
 
-            concatenate_string(&file_html_list, FILE_EXPLORER_FOOTER);
+            // send dir
             send_response(conn->socket, file_html_list);
 
             free(file_html_list);
             for (int i = 0; i < file_amount; i++)
                 free(dir_content[i]);
-            free(dir_content);
+            free(dir_content); 
             break;
         }
 
         // Open the file
-        print(NULL, "Finding for %s file..", file_path);
-           
+        write_log(NULL, "Finding for '%s' file..", file_path);
         FILE *file = fopen(file_path, "rb");
 
         // If file is not found send a 404
         if (file == NULL) {
-            print("error", "The file '%s' could not be opened/found.", file_path);
+            write_log("error", "The file '%s' could not be opened/found.", file_path);
             send_404_response(conn->socket);
+            
             break;
 
         // Serve the file
         } else {
             file_size = get_file_length(file_path);
             start_offset = 0, end_offset = file_size -1;
-            print(NULL, "File size: "SIZE_T_FORMAT, file_size);
+            write_log(NULL, "File size: "SIZE_T_FORMAT, file_size);
 
-            // Check if the request is has a "Range" header and extract range to stream
+            // Check if the request is has a "range" header and extract range to stream
             char* range_header = strstr(buffer, "Range: bytes=");
             if (range_header != NULL) {
                 sscanf(range_header, "Range: bytes="SIZE_T_FORMAT"-"SIZE_T_FORMAT"", &start_offset, &end_offset);
-                print(NULL, "Range detected: from "SIZE_T_FORMAT" to " SIZE_T_FORMAT, start_offset, end_offset);
-                send_206_http_response(
+                write_log(NULL, "Range detected: from "SIZE_T_FORMAT" to " SIZE_T_FORMAT, start_offset, end_offset);
+                send_partial_content(
                     conn->socket,
                     file, 
                     get_filename_mimetype(file_path), 
@@ -660,24 +762,24 @@ void handle_connection(connection_params *conn){
                     start_offset, 
                     end_offset);
             }else{ 
-                send_200_http_response(
+                send_content(
                     conn->socket,
                     file,
                     get_filename_mimetype(file_path),
                     file_size);
             }
+            
             fclose(file);
         }
     }
-    free(file_path);
     close_socket(conn->socket);
+    free(conn);
 }
 
 #ifdef MULTITHREAD_ON
-    void *handle_connection_thread(void *thread_args) {
-        connection_params *connection = (connection_params*)thread_args;
+    void *handle_connection_thread(void *conn) {
+        connection_params *connection = (connection_params*)conn;
         handle_connection(connection);
-        free(connection);
         pthread_exit(NULL);
         return NULL;
     }

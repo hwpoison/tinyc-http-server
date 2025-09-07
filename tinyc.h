@@ -42,6 +42,8 @@
 #define TRUE  1
 #define FALSE 0
 
+
+
 #define MAX_HEADER_SIZE 1024
 #define BUFFER_SIZE 40000       // 40kb
 #define MAX_PATH_LENGTH 400
@@ -49,11 +51,15 @@
 #define MAX_MIME_TYPES 30
 #define DEFAULT_PORT 8081       // server default server
 #define SERVER_BACKLOG 250      // server max listen connections
-#define CLIENT_TIMEOUT 15
+#define CLIENT_TIMEOUT 5
 #define EXPLORER_MAX_FILES 2048 // max amount of files that explorer print
 #define EXPLORER_MAX_FILENAME_LENGTH 500
+#define HTML_EL_SIZE 1024
 
-int8_t print_output = TRUE; // show all server output 
+// log file
+#define LOG_FILE_NAME "tinyc.log"
+int8_t no_logs = FALSE;
+FILE *log_file = NULL;
 
 typedef struct {
     const char *extension;
@@ -72,7 +78,7 @@ typedef struct {
 #endif
 
 // Utils functions
-void print(const char* type, const char* msg, ...);
+void write_log(const char* type, const char* msg, ...);
 char* get_current_datetime();
 const char *get_filename_extension(const char* file_path);
 const char *get_filename_mimetype(const char *path);
@@ -80,22 +86,25 @@ void remove_slash_from_start(char* str);
 int starts_with(const char *str, const char *word);
 size_t get_file_length(const char* filename);
 char *get_arg_value(int argc, char **argv, char *target_arg);
-char *extract_URI_from_header(char *header_content);
+int extract_URI_from_header(char *header_content, char *output_buffer, size_t buffer_size) ;
 void *safe_malloc(size_t size);
+char *cstrdup(char *string);
 char **get_dir_content(const char* path, size_t *file_amount);
 void decode_url(char* url);
-void concatenate_string(char** str, const char* new_str);
+void concat_str(char** str, const char* new_str);
 void set_shell_text_color(const char* color);
-void print_tinyc_welcome_logo();
+void socket_error_msg();
+void init_log_file();
+void close_log_file();
 
 // Response functions
 void send_response(SocketType socket, const char *response_content);
 void send_404_response(SocketType  socket); //  not found
 void send_500_response(SocketType  socket); // internal error
 void send_302_response(SocketType  socket, char *uri) ; // redirection
-void send_200_http_response(SocketType  socket, FILE *file, const char *content_type, size_t content_length);
-void send_206_http_response(SocketType  socket, FILE *file, const char *content_type, size_t file_size, size_t start, size_t end);
-void send_file_in_chuncks(SocketType  socket, FILE *file);
+void send_content(SocketType  socket, FILE *file, const char *content_type, size_t content_length);
+void send_partial_content(SocketType  socket, FILE *file, const char *content_type, size_t file_size, size_t start, size_t end);
+void send_file_content(SocketType  socket, FILE *file);
 void close_socket(SocketType socket);
 void handle_connection(connection_params *params);
 
@@ -125,22 +134,24 @@ MimeType mime_types[MAX_MIME_TYPES] = {
 
 // File explorer
 const char *FILE_EXPLORER_HEADER = "HTTP/1.1\r\n"
-"Content-Type: text/html\r\n\r\n"
-"<!DOCTYPE html>"
-"<html>"
-"<head><title>TinyC</title><meta charset='UTF-8'></head>"
-"<body>"
-"<h1>Content into: %s</h1>"
-"(%d elements found)"
-"<hr>"
-"<ul style='padding-left:3em'>";
+    "Content-Type: text/html\r\n"
+    "Connection: keep-alive\r\n"
+    "Keep-Alive: timeout=5\r\n\r\n"
+    "<!DOCTYPE html>"
+    "<html>"
+    "<head><title>TinyC</title><meta charset='UTF-8'></head>"
+    "<body>"
+    "<h1>Content into: %s</h1>"
+    "(%d elements found)"
+    "<hr>"
+    "<ul style='padding-left:3em'>";
 
 const char *FILE_EXPLORER_LIST_ELEMENT = "<a href='%s'>%s</a><br>";
 
 const char *FILE_EXPLORER_FOOTER = "</ul>"
-"<hr><style>html{cursor:default;font-family:verdana;line-height:1.5;}</style>"
-"</body>"
-"</html>";
+    "<hr><style>html{cursor:default;font-family:verdana;line-height:1.5;}</style>"
+    "</body>"
+    "</html>";
 
 // HTTP common responses
 const char *HTTP_404_NOT_FOUND =
@@ -165,4 +176,23 @@ const char *HTTP_302_REDIRECTION =
     "Location: %s\r\n"
     "Connection: close\r\n"
     "\r\n";
+
+const char *HTTP_414_URL_TOO_LONG = 
+    "HTTP/1.1 414 Found\r\n"
+    "Content-Type: text/html\r\n"
+    "Content-Length: %d\r\n\r\n<html>"
+    "<head><title>414 URL Too Long</title></head>"
+    "<body><h1>414</h1><p> URL too long!</p>"
+    "</body></html>";
+
+
+const char *HTTP_200_OK = 
+    "HTTP/1.1 200 Found\r\n"
+    "Content-Type: text/html\r\n"
+    "Content-Length: %d\r\n\r\n<html>"
+    "<head><title>OKi doki</title></head>"
+    "<body><h1>OK</h1>"
+    "</body></html>";
 #endif
+
+

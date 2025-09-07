@@ -1,11 +1,11 @@
 CC = gcc
-CFLAGS = -Wall -O3
+CFLAGS =  -std=c99 -Os -s
 LDFLAGS = 
 LDFLAGS_PTHREAD = -DMULTITHREAD_ON
 
 ifdef OS
 	ifeq ($(OS), Windows_NT) # On windows
-		LDFLAGS += -lws2_32
+		LDFLAGS += -lws2_32 -lpthread
 	endif
 else
 		LDFLAGS_PTHREAD += -lpthread

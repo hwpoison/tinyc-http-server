@@ -2,7 +2,7 @@
 
 #### A very basic HTTP server in C
 
-Is a lightweight web server written in C using sockets. Compilable for Windows and Linux for server static content and media files.
+Is a multithread lightweight web server written in pure C. Compilable for Windows and Linux for server static content and media files from a directory.
 
 ![](https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/HTTP_logo.svg/320px-HTTP_logo.svg.png)
 
@@ -35,13 +35,13 @@ Basic usage: tinyc --port 8081 --folder /my_web
  example: tinyc --port 3543 --folder simple_web/index.html
 
 Options:
-        --folder <folder_path>: Folder to serve. By default serve all executable location dir content.
+        --folder <folder_path>: Folder to serve. By default is a relative path due to executable location.
         --ip: Set server IP. Default: ANY (Local/Network).
         --port <port_number>: Port number. Default is 8081
         --backlog <number>: Max server listener.
         --max-threads <number>: Max server threads.
         --default-redirect <file_path>/: redirect / to default file route. ex: simple_web/index.html
-        --no-print : No print log (less mem consumption).
+        --no-logs: No print log (Less I/O bound due to stdout and less memory consumption)).
         --no-file-explorer: Disable file explorer.
 ```
 
