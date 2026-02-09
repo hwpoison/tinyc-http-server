@@ -134,7 +134,7 @@ MimeType mime_types[MAX_MIME_TYPES] = {
 
 // File explorer
 const char *FILE_EXPLORER_HEADER = "HTTP/1.1\r\n"
-    "Content-Type: text/html\r\n"
+    "Content-Type: text/html; charset=UTF-8\r\n"
     "Connection: keep-alive\r\n"
     "Keep-Alive: timeout=5\r\n\r\n"
     "<!DOCTYPE html>"

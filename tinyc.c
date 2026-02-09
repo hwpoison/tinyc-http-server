@@ -141,8 +141,7 @@ int main(int argc, char *argv[]) {
     // At this point, the server is running and waiting for upcoming connections
     for(;;) {
         #ifdef MULTITHREAD_ON
-            // Check threads limits, if reach the max, waits until all are finished before 
-            // open new one.
+            // Check threads limits, if reach the max, waits until all are finished before open a new one
             if(thread_count >= max_threads){
                 write_log("error", "Server too busy...\n");
                 for(int i = 0; i < max_threads - 1; i++){
@@ -239,6 +238,26 @@ void close_log_file() {
     }
 }
 
+#ifndef __linux__
+// For Windows, converts a single str to windows wide range 
+WCHAR *utf8_to_wide(const char *s)
+{
+	if (!s) return NULL;
+
+	int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+	if (!n) return NULL;
+
+	WCHAR *w = malloc(n * sizeof(WCHAR));
+	if (!w) return NULL;
+
+	if (!MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n)) {
+		free(w);
+		return NULL;
+	}
+	return w;
+}
+#endif
+
 void write_log(const char* type, const char* msg, ...) {
     if(!no_logs){
         if(log_file==NULL)
@@ -272,6 +291,7 @@ void write_log(const char* type, const char* msg, ...) {
     }
 }
 
+// send raw bytes trought socket connection
 void send_response(SocketType to_socket, const char *response_content) {
     write_log(NULL, "Sending %d bytes.", strlen(response_content));
     if(send(to_socket, response_content, strlen(response_content), 0) < 0){
@@ -280,7 +300,7 @@ void send_response(SocketType to_socket, const char *response_content) {
 }
 
 void send_partial_content(SocketType  socket, FILE *file, const char *content_type, size_t file_size, size_t start, size_t end) {
-    // Seek the file to the specified rangue before send
+    // Seek the file to the specified range before send
     fseek(file, start, SEEK_SET);
     // Check if the requested range is within the file size
     if (start > file_size || end > file_size) {
@@ -363,23 +383,38 @@ int starts_with(const char *str, const char *word) {
         return fileLength;
     }
 #else
-    uint64_t get_file_length(const char* filename) {
-        HANDLE hFile = CreateFile(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hFile == INVALID_HANDLE_VALUE) {
-            write_log("error", "Error to open the file for get file size : %s", filename);
-            return 0;
-        }
-        LARGE_INTEGER fileSize;
-        if (!GetFileSizeEx(hFile, &fileSize)) {
-            CloseHandle(hFile);
-            write_log("error", "Error to get file size : %s", filename);
-            return 0;
-        }
-        CloseHandle(hFile);
-        return (uint64_t)fileSize.QuadPart;
-    }
+	uint64_t get_file_length(const char* filename)
+	{
+		WCHAR *w_filename = utf8_to_wide(filename);
+		HANDLE hFile = CreateFileW(
+			w_filename,
+			GENERIC_READ,
+			FILE_SHARE_READ,
+			NULL,
+			OPEN_EXISTING,
+			FILE_ATTRIBUTE_NORMAL,
+			NULL
+		);
+		free(w_filename);
+
+		if (hFile == INVALID_HANDLE_VALUE) {
+			write_log("error", "Error to open the file for get file size : %s", filename);
+			return 0;
+		}
+
+		LARGE_INTEGER fileSize;
+		if (!GetFileSizeEx(hFile, &fileSize)) {
+			CloseHandle(hFile);
+			write_log("error", "Error to get file size : %s", filename);
+			return 0;
+		}
+
+		CloseHandle(hFile);
+		return (uint64_t)fileSize.QuadPart;
+	}
 #endif
 
+// custom strdup function 
 char *cstrdup(char *string){
    size_t string_len = strlen(string) + 1;
    char *dup = malloc(string_len);
@@ -515,7 +550,6 @@ char **get_dir_content(const char* path, size_t *file_amount) {
             write_log("error", "File name too long.");
             continue;
         }
-
         if(file_n >= EXPLORER_MAX_FILES){
             write_log("info", "Maximum of showed files exceded.");
             break;
@@ -540,40 +574,49 @@ char **get_dir_content(const char* path, size_t *file_amount) {
     }
     closedir(dir);
 
-  #else
-    WIN32_FIND_DATA find_data;
-    HANDLE h_find;
-    h_find = FindFirstFile(path, &find_data);
+  #else	
+	WCHAR *wpath = utf8_to_wide(path);
+	WIN32_FIND_DATAW find_data;
+	HANDLE h_find;
 
-    if (h_find == INVALID_HANDLE_VALUE){
-        write_log("error", "windows: not possible get directory content %s", path);
-        free(dir_content);
-        return NULL;
-    }
+	if (!wpath) {
+		write_log("error", "utf8_to_wide failed for path %s", path);
+		free(dir_content);
+		return NULL;
+	}
 
-    while(FindNextFile(h_find, &find_data)){
-        if(file_n >= EXPLORER_MAX_FILES){
-            write_log("info", "Maximum of files exceded.");
-            break; 
-        }
+	h_find = FindFirstFileW(wpath, &find_data);
+	free(wpath);
 
-        if(strlen(find_data.cFileName) > EXPLORER_MAX_FILENAME_LENGTH){
-            write_log("error", "File name too long.");
-            continue;
-        }
-        if (!strcmp(find_data.cFileName, ".") || !strcmp(find_data.cFileName, ".."))
-            continue;
+	if (h_find == INVALID_HANDLE_VALUE) {
+		write_log("error", "windows: not possible get directory content %s", path);
+		free(dir_content);
+		return NULL;
+	}
 
-        if(find_data.dwFileAttributes == FILE_ATTRIBUTE_DIRECTORY)
-            sprintf(entry_name, "%s/", find_data.cFileName);
-        else
-            sprintf(entry_name, "%s", find_data.cFileName);
+	do {
+		char entry_name[EXPLORER_MAX_FILENAME_LENGTH * 3];
 
-        dir_content[file_n] = (char*)safe_malloc(strlen(entry_name) + 1);
-        strcpy(dir_content[file_n], entry_name);
-        file_n++;
-    }
-  FindClose(h_find);
+		WideCharToMultiByte(
+			CP_UTF8, 0,
+			find_data.cFileName, -1,
+			entry_name, sizeof(entry_name),
+			NULL, NULL
+		);
+
+		if (!strcmp(entry_name, ".") || !strcmp(entry_name, ".."))
+			continue;
+
+		if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			strcat(entry_name, "/");
+
+		dir_content[file_n] = safe_malloc(strlen(entry_name) + 1);
+		strcpy(dir_content[file_n], entry_name);
+		file_n++;
+
+	} while (FindNextFileW(h_find, &find_data));
+
+	FindClose(h_find);
 #endif
   *file_amount = file_n;
   dir_content[file_n+1] = NULL;
@@ -616,31 +659,54 @@ void socket_error_msg(){
     #endif
 }
 
+int read_socket_content(connection_params *conn, char *buffer){
+	size_t read_bytes;
+#ifdef __linux__
+	read_bytes = read(conn->socket, buffer, BUFFER_SIZE);
+#else
+	read_bytes = recv(conn->socket, buffer, BUFFER_SIZE, 0);
+#endif
+	if (read_bytes == 0) {
+		write_log(NULL, "[%d] Connection closed by client.", conn->socket);
+		return -1;
+	} else if (read_bytes == -1) {
+		socket_error_msg();
+		write_log("error", "[%d] Error reading content from client socket.", conn->socket);
+		return -1;
+	}
+	buffer[read_bytes] = '\0'; // delimites the buffer
+	return (int)read_bytes;
+}
+
+FILE *open_a_file(char *file_path){
+#ifdef __linux__
+        FILE *file = fopen(file_path, "rb");
+#else
+		WCHAR *w_file_path = utf8_to_wide(file_path);
+		if(!w_file_path){
+			write_log("error", "Imposible to get '%s' file.", file_path);	
+		}
+		FILE *file = _wfopen(w_file_path, L"rb");
+		free(w_file_path);
+#endif
+	return file;
+}
+
 void handle_connection(connection_params *conn){
     char file_path[MAX_PATH_LENGTH] = {0};
     char buffer[BUFFER_SIZE] = {0};
     int8_t in_folder = FALSE; // Only serve files into specific folder
-    size_t read_bytes, file_size, start_offset, end_offset;
+    size_t file_size, start_offset, end_offset;
 
     /* ====================================== */
     /* =Read-Send loop between client-server= */
     /* ====================================== */
     // At this point, a connection with a client is established and the socket is ready to receive and send requests.
     for(;;){
-        #ifdef __linux__
-            read_bytes = read(conn->socket, buffer, BUFFER_SIZE);
-        #else
-            read_bytes = recv(conn->socket, buffer, BUFFER_SIZE, 0);
-        #endif
-
-        if (read_bytes == 0) {
-            write_log(NULL, "[%d] Connection closed by client.", conn->socket);
-            break;
-        } else if (read_bytes == -1) {
-            socket_error_msg();
-            write_log("error", "[%d] Error reading content from client socket.", conn->socket);
-            break;
-        }
+		// Read the incoming client content
+		int read = read_socket_content(conn, buffer);
+		if(read <= 0)
+			break; // if there is nothing, break and close connection
 
         // Read and extract URI from the recv request
         if(extract_URI_from_header(buffer, file_path, sizeof(file_path))){
@@ -657,7 +723,7 @@ void handle_connection(connection_params *conn){
 
         write_log(NULL, "Handling route: %s", file_path);
 
-        // Check if uri path == '/' and redirect to default route
+        // Check if uri path == '/' then redirect to default route
         if(strcmp(file_path, "/") == 0 && conn->default_route != NULL){
             write_log("info", "Redirecting to %s", conn->default_route);
             send_302_response(conn->socket, conn->default_route);
@@ -671,9 +737,9 @@ void handle_connection(connection_params *conn){
             in_folder = starts_with(file_path, conn->folder_to_serve);
         }
         
-        /* =====================================  */
-        /* =======      File explorer      =====  */
-        /* =====================================  */
+        /* ==========================================  */
+        /* =======      Show File explorer      =====  */
+        /* ==========================================  */
         size_t path_len = strlen(file_path);
         char current_path[EXPLORER_MAX_FILENAME_LENGTH] = {0};
 
@@ -702,7 +768,7 @@ void handle_connection(connection_params *conn){
                break;
             }
 
-            ///////// Create the html view /////////
+            ///////// Create the html view for the directory list /////////
             char *file_html_list = NULL;
             char list_element[EXPLORER_MAX_FILENAME_LENGTH];
             // Explorer header
@@ -732,32 +798,37 @@ void handle_connection(connection_params *conn){
             break;
         }
 
-        // Open the file
+        /* ==========================================  */
+        /* =======      Send files              =====  */
+        /* ==========================================  */
+
+        // Open the file using filename received by request 
         write_log(NULL, "Finding for '%s' file..", file_path);
-        FILE *file = fopen(file_path, "rb");
+		FILE *file = open_a_file(file_path);
 
         // If file is not found send a 404
         if (file == NULL) {
             write_log("error", "The file '%s' could not be opened/found.", file_path);
             send_404_response(conn->socket);
-            
             break;
 
-        // Serve the file
+        // if exists, send it
         } else {
             file_size = get_file_length(file_path);
-            start_offset = 0, end_offset = file_size -1;
+
+            start_offset = 0, end_offset = (file_size > 0) ? file_size -1 : 0;
             write_log(NULL, "File size: "SIZE_T_FORMAT, file_size);
 
             // Check if the request is has a "range" header and extract range to stream
             char* range_header = strstr(buffer, "Range: bytes=");
+			const char *mimetype = get_filename_mimetype(file_path);
             if (range_header != NULL) {
                 sscanf(range_header, "Range: bytes="SIZE_T_FORMAT"-"SIZE_T_FORMAT"", &start_offset, &end_offset);
                 write_log(NULL, "Range detected: from "SIZE_T_FORMAT" to " SIZE_T_FORMAT, start_offset, end_offset);
                 send_partial_content(
                     conn->socket,
                     file, 
-                    get_filename_mimetype(file_path), 
+					mimetype,
                     file_size,
                     start_offset, 
                     end_offset);
@@ -765,10 +836,9 @@ void handle_connection(connection_params *conn){
                 send_content(
                     conn->socket,
                     file,
-                    get_filename_mimetype(file_path),
+					mimetype,
                     file_size);
             }
-            
             fclose(file);
         }
     }
