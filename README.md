@@ -35,13 +35,13 @@ Basic usage: tinyc --port 8081 --folder /my_web
  example: tinyc --port 3543 --folder simple_web/index.html
 
 Options:
-        --folder <folder_path>: Folder to serve. By default is a relative path due to executable location.
         --ip: Set server IP. Default: ANY (Local/Network).
         --port <port_number>: Port number. Default is 8081
         --backlog <number>: Max server listener.
         --max-threads <number>: Max server threads.
-        --default-redirect <file_path>/: redirect / to default file route. ex: simple_web/index.html
-        --no-logs: No print log (Less I/O bound due to stdout and less memory consumption)).
+        --default-redirect <file_path>: Redirect from / to a specified route. eg: simple_web/index.html
+        --folder <folder_path>: Just serve from a specified folder content. eg: simple_web/ 
+        --no-logs: Disable logging.
         --no-file-explorer: Disable file explorer.
 ```
 

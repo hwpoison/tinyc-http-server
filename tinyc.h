@@ -42,8 +42,6 @@
 #define TRUE  1
 #define FALSE 0
 
-
-
 #define MAX_HEADER_SIZE 1024
 #define BUFFER_SIZE 40000       // 40kb
 #define MAX_PATH_LENGTH 400
@@ -73,29 +71,42 @@ typedef struct {
     int8_t show_explorer;
 } connection_params;
 
+typedef enum {
+	FS_NOT_FOUND = 0,
+	FS_FILE,
+	FS_DIR
+} fs_type;
+
 #ifdef MULTITHREAD_ON
     void *handle_connection_thread(void *thread_args);
+    int active_threads = 0;
+    pthread_mutex_t thread_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t thread_cond = PTHREAD_COND_INITIALIZER;
 #endif
 
-// Utils functions
-void write_log(const char* type, const char* msg, ...);
-char* get_current_datetime();
 const char *get_filename_extension(const char* file_path);
 const char *get_filename_mimetype(const char *path);
-void remove_slash_from_start(char* str);
-int starts_with(const char *str, const char *word);
-size_t get_file_length(const char* filename);
-char *get_arg_value(int argc, char **argv, char *target_arg);
-int extract_URI_from_header(char *header_content, char *output_buffer, size_t buffer_size) ;
+int get_file_size(FILE *file, uint64_t *size_out);
+char **get_dir_content(const char* path, size_t *file_amount);
+char *os_dir_to_html(const char *dir_path);
+fs_type get_fs_type(const char *path);
+
 void *safe_malloc(size_t size);
 char *cstrdup(char *string);
-char **get_dir_content(const char* path, size_t *file_amount);
+
+int url_to_ospath(const char *url_path, char *os_path, size_t max_length);
 void decode_url(char* url);
+int extract_URI_from_header(char *header_content, char *output_buffer, size_t buffer_size) ;
+void remove_slash_from_start(char* str);
 void concat_str(char** str, const char* new_str);
-void set_shell_text_color(const char* color);
-void socket_error_msg();
+int starts_with(const char *str, const char *word);
+int is_directory_request(const char *url_path);
 void init_log_file();
+void write_log(const char* type, const char* msg, ...);
 void close_log_file();
+void set_shell_text_color(const char* color);
+char* get_current_datetime();
+char *get_arg_value(int argc, char **argv, char *target_arg);
 
 // Response functions
 void send_response(SocketType socket, const char *response_content);
@@ -103,9 +114,10 @@ void send_404_response(SocketType  socket); //  not found
 void send_500_response(SocketType  socket); // internal error
 void send_302_response(SocketType  socket, char *uri) ; // redirection
 void send_content(SocketType  socket, FILE *file, const char *content_type, size_t content_length);
-void send_partial_content(SocketType  socket, FILE *file, const char *content_type, size_t file_size, size_t start, size_t end);
 void send_file_content(SocketType  socket, FILE *file);
+void send_partial_content(SocketType  socket, FILE *file, const char *content_type, size_t file_size, size_t start, size_t end);
 void close_socket(SocketType socket);
+void socket_error_msg();
 void handle_connection(connection_params *params);
 
 // All supported mimetypes
@@ -132,7 +144,7 @@ MimeType mime_types[MAX_MIME_TYPES] = {
     { ".pdf", "application/pdf" }
 };
 
-// File explorer
+// File explorer view template
 const char *FILE_EXPLORER_HEADER = "HTTP/1.1\r\n"
     "Content-Type: text/html; charset=UTF-8\r\n"
     "Connection: keep-alive\r\n"
